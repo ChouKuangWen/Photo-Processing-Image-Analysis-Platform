@@ -245,6 +245,14 @@ Batch
 
 Batch ID 使用 UUID / GUID。
 
+Batch 建立時：
+
+- Status = Pending
+- ProcessedCount = 0
+- SuccessCount = 0
+- FailedCount = 0
+- CompletedAt = null
+
 ---
 
 ### FR-04 Image Creation
@@ -264,6 +272,10 @@ Status
 CreatedAt
 UpdatedAt
 ```
+
+Image 建立時：
+
+- Status = Pending
 
 其他 Metadata 由後續 Processing Module 補充。
 
