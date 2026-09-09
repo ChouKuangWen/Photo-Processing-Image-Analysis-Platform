@@ -801,7 +801,7 @@ Images N ─── 1 Batches
 | Id | BIGINT | No | PK | Identity | Job ID |
 | ImageId | BIGINT | No | FK, Index | — | Image ID |
 | BatchId | UUID | No | FK, Index | — | Batch ID |
-| Workflow | VARCHAR(30) | No | Unique | — | Workflow |
+| Workflow | VARCHAR(30) | No | — | — | Workflow |
 | Status | VARCHAR(30) | No | Index | — | Job 狀態 |
 | RetryCount | INT | No | — | 0 | 重試次數 |
 | CreatedAt | TIMESTAMP | No | — | — | 建立時間 |
