@@ -504,15 +504,15 @@ public interface IProcessingService
         CancellationToken cancellationToken);
 
     Task<ProcessingJob?> GetJobAsync(
-        Guid jobId,
+        long jobId,
         CancellationToken cancellationToken);
 
     Task RetryJobAsync(
-        Guid jobId,
+        long jobId,
         CancellationToken cancellationToken);
 
     Task ProcessJobAsync(
-        Guid jobId,
+        long jobId,
         CancellationToken cancellationToken);
 }
 ```
@@ -606,15 +606,14 @@ Database-Schema.md
 
 | 欄位 | 型別 | 說明 |
 |---|---|---|
-| Id | GUID | Job Identifier |
-| ImageId | GUID | 對應 Image |
+| Id | BIGINT | Job Identifier |
+| ImageId | BIGINT | 對應 Image |
 | BatchId | GUID | 對應 Batch |
 | Workflow | VARCHAR | Workflow Identifier |
 | Status | VARCHAR | Processing Status |
 | RetryCount | INT | Retry 次數 |
 | ErrorCode | VARCHAR | 錯誤代碼 |
 | ErrorMessage | TEXT | 錯誤訊息 |
-| TraceId | VARCHAR | Trace Identifier |
 | CreatedAt | DATETIME | 建立時間 |
 | StartedAt | DATETIME NULL | 開始時間 |
 | CompletedAt | DATETIME NULL | 完成時間 |
@@ -640,8 +639,8 @@ INDEX(Status)
 | 欄位 | 型別 | 說明 |
 |---|---|---|
 | Id | GUID | Log Identifier |
-| JobId | GUID | Processing Job |
-| ImageId | GUID | Image Identifier |
+| JobId | BIGINT | Processing Job |
+| ImageId | BIGINT | Image Identifier |
 | Step | VARCHAR | Processing Step |
 | Status | VARCHAR | Step Status |
 | ErrorCode | VARCHAR NULL | 錯誤代碼 |
@@ -710,9 +709,9 @@ POST /api/v1/processing/jobs
 
 ```json
 {
-  "imageId": "guid",
+  "imageId": 1024,
   "batchId": "guid",
-  "workflow": "default"
+  "workflow": "Full"
 }
 ```
 
@@ -724,7 +723,7 @@ POST /api/v1/processing/jobs
 
 ```json
 {
-  "jobId": "guid",
+  "jobId": 1001,
   "status": "Pending"
 }
 ```
@@ -743,10 +742,10 @@ GET /api/v1/processing/jobs/{jobId}
 
 ```json
 {
-  "jobId": "guid",
-  "imageId": "guid",
+  "jobId": 1001,
+  "imageId": 1024,
   "batchId": "guid",
-  "workflow": "default",
+  "workflow": "Full",
   "status": "Processing",
   "retryCount": 0,
   "createdAt": "2026-01-01T10:00:00Z",
@@ -771,7 +770,7 @@ POST /api/v1/processing/jobs/{jobId}/retry
 
 ```json
 {
-  "jobId": "guid",
+  "jobId": 1001,
   "status": "Pending"
 }
 ```
