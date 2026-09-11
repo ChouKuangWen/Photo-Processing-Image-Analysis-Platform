@@ -50,6 +50,7 @@ Upload Module 負責：
 - Request Validation
 - Extension Validation
 - MIME Type Validation
+- File Integrity Validation
 - File Size Validation
 - Empty File Validation
 - Filename Validation
@@ -386,14 +387,17 @@ Application Layer 不直接依賴 GCS API。
 
 Client Filename 不得直接作為 Storage Path。
 
-必須執行：
+Upload Module 必須防止不可信任 Filename 影響 Storage Path，至少包含：
 
 ```text
-Filename Sanitization
 Path Traversal Prevention
 Invalid Character Validation
 Filename Length Validation
 ```
+
+File Validation 階段採 **Reject** 策略，不在 `IFileValidationService` 內修改或 Sanitization Client Filename。
+
+若後續 Storage Path 產生流程需要安全名稱或轉換規則，必須由另行定義的 Storage Path / Filename 處理流程負責，不得將 Client Filename 原樣直接作為 Storage Path。
 
 例如：
 
@@ -401,7 +405,7 @@ Filename Length Validation
 ../../../file.jpg
 ```
 
-不得直接寫入 Storage。
+必須拒絕，不得直接寫入 Storage。
 
 ---
 
@@ -538,7 +542,25 @@ MIME Validation
 File Size Validation
 File Integrity Validation
 Filename Validation
+Path Traversal Prevention
 ```
+
+File Validation 的 Module-Level Rules：
+
+- 支援副檔名：`.jpg`、`.jpeg`、`.png`。
+- Extension 比較不區分大小寫，並以檔名最後一個副檔名判斷。
+- `.jpg` / `.jpeg` 必須對應 `image/jpeg`；`.png` 必須對應 `image/png`。
+- MIME Type 比較不區分大小寫，可忽略前後空白，但不接受附加 Parameter 或其他 Alias。
+- Empty File 必須拒絕。
+- File Size 超過 configured maximum size 必須拒絕；等於上限可通過 Size Validation。
+- Filename 不得為空白、`.`、`..`，不得超過 255 characters，不得包含控制字元、Path Separator 或 `< > : " / \ | ? *`。
+- Path Traversal / Absolute Path 必須拒絕。
+- File Integrity 採 MVP Basic File Signature Validation，不做完整圖片 Decode。
+- JPG / JPEG 起始 Signature 必須符合 `FF D8 FF`。
+- PNG 起始 Signature 必須符合 `89 50 4E 47 0D 0A 1A 0A`。
+- Extension、MIME Type 與 File Signature 必須一致。
+
+File Validation 只負責判斷並回報結果，不負責 Filename Sanitization。
 
 ---
 
@@ -703,12 +725,15 @@ Upload Module 必須處理：
 | Case | Expected Behavior |
 |---|---|
 | Empty Request | `INVALID_FILE` |
-| Empty File | Reject |
-| Unsupported Extension | Reject |
-| MIME Mismatch | Reject |
+| Empty File | `INVALID_FILE` |
+| Negative File Length | `INVALID_FILE` |
+| Unsupported / Missing Extension | `UNSUPPORTED_FORMAT` |
+| MIME Mismatch | `INVALID_FILE` |
 | Oversized File | `FILE_TOO_LARGE` |
-| Invalid Filename | Reject / 依既定 Sanitization Rule |
-| Path Traversal | Reject |
+| File Size = configured maximum | Size Validation 通過 |
+| Invalid Filename | `INVALID_FILE`；Reject，不在 Validator 內 Sanitization |
+| Path Traversal / Absolute Path | `INVALID_FILE` |
+| Invalid / Insufficient File Signature | `INVALID_FILE` |
 | Duplicate Filename | 允許；以 Image ID 區分 |
 | Partial Upload Failure | 遵循 System-Level Specification |
 
@@ -720,7 +745,18 @@ Upload Module 必須處理：
 .png
 ```
 
+格式判斷規則：
+
+- Extension 比較不區分大小寫，使用最後一個副檔名。
+- `.jpg` / `.jpeg` 對應 `image/jpeg`。
+- `.png` 對應 `image/png`。
+- JPG / JPEG Signature：`FF D8 FF`。
+- PNG Signature：`89 50 4E 47 0D 0A 1A 0A`。
+- Extension、MIME Type 與 Signature 必須一致。
+
 檔案驗證不得只依賴副檔名。
+
+File Integrity 在本 Module 的 MVP 定義為 Basic File Signature Validation；不要求完整圖片 Decode 或深層損毀檢測。
 
 ---
 
@@ -1027,6 +1063,17 @@ Path Traversal
 Workflow
 ```
 
+File Validation 必須符合：
+
+- `.jpg` / `.jpeg` ↔ `image/jpeg`。
+- `.png` ↔ `image/png`。
+- Extension 比較不區分大小寫。
+- Empty File 必須拒絕。
+- File > configured maximum size 必須拒絕。
+- Filename / Path Traversal 必須符合 §1.9 與 §1.13 規則。
+- File Integrity 採 Basic File Signature Validation：JPG / JPEG = `FF D8 FF`；PNG = `89 50 4E 47 0D 0A 1A 0A`。
+- Extension、MIME Type 與 File Signature 必須一致。
+
 不合法 Request 不得建立無效 Processing Job。
 
 ---
@@ -1128,6 +1175,16 @@ Response：
   }
 }
 ```
+
+File Validation Error Mapping：
+
+| Error Code | Message | 代表情況 |
+|---|---|---|
+| `UNSUPPORTED_FORMAT` | `The uploaded file format is not supported.` | Unsupported / Missing Extension |
+| `FILE_TOO_LARGE` | `The uploaded file exceeds the maximum allowed size.` | File > configured maximum size |
+| `INVALID_FILE` | `The uploaded file is invalid.` | Empty / Negative Length、MIME Mismatch、Invalid Filename、Path Traversal、Invalid / Insufficient Signature 等其他 File Validation Failure |
+
+File Validation 不得自行新增其他 Error Code。
 
 Client 不得取得：
 
@@ -1287,13 +1344,24 @@ Unit Test 驗證 Upload Module 的 Domain / Application 邏輯。
 Valid JPG
 Valid JPEG
 Valid PNG
-Invalid Extension
-Invalid MIME Type
+Uppercase Extension
+Invalid / Missing Extension
+Invalid MIME Type / MIME Mismatch
 Empty File
+Negative File Length
+File Size Below Maximum
+File Size Equal Maximum
 File Too Large
 Invalid Filename
-Path Traversal
+Filename Length Boundary
+Path Traversal / Absolute Path
+Valid JPEG Signature
+Valid PNG Signature
+Invalid Signature
+Insufficient Signature Bytes
 ```
+
+File Validation Unit Test 不要求完整圖片 Decode；Integrity Test 只驗證本 Module 核准的 Basic File Signature Validation。
 
 ### Upload Service
 
@@ -1557,6 +1625,7 @@ Upload Module 必須至少符合：
 ✓ MIME Validation
 ✓ File Size Validation
 ✓ Empty File Validation
+✓ File Integrity Validation
 ✓ Filename Validation
 ✓ Path Traversal Prevention
 ✓ Workflow Validation
