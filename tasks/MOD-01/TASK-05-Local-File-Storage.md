@@ -28,7 +28,7 @@
 - 實作 `IFileStorageService`
 - 將來源 Stream 寫入本機檔案系統
 - 建立必要的 Storage Directory
-- 回傳既有 Contract 定義的 Storage Result / Stored Path
+- 回傳既有 Contract 的 string StoredPath：original/{guid}
 - 支援檔案刪除
 - 支援 Cancellation
 - 避免覆寫既有檔案
@@ -63,6 +63,13 @@ tests/PhotoPlatform.UnitTests/PhotoPlatform.UnitTests.csproj
 用途僅限：
 
 > 加入 `PhotoPlatform.Infrastructure` Project Reference。
+
+為設定 §7.2 的 Internal Test Seam Visibility，另允許以下兩種方式擇一：
+
+- Assembly-level attribute 方式：允許新增 `src/PhotoPlatform.Infrastructure/Properties/AssemblyInfo.cs`。
+- Project-level / csproj 方式：允許對 `src/PhotoPlatform.Infrastructure/PhotoPlatform.Infrastructure.csproj` 進行必要的最小修改。
+
+上述額外允許項目僅限設定 `PhotoPlatform.UnitTests` 對 Infrastructure internal members 的測試可見性，不得進行其他 project configuration 變更。實作時只能選擇其中一種方式，不得重複設定。
 
 不得新增 NuGet Package。
 
@@ -100,7 +107,7 @@ Stop
 
 # 5. Storage Root
 
-`LocalFileStorageService` 必須由外部提供 Storage Root Directory。
+`LocalFileStorageService` 必須由 Constructor 注入 Storage Root Directory（`storageRoot`），原始上傳檔案儲存於其 `original` 子目錄。
 
 例如概念：
 
@@ -140,7 +147,7 @@ Constructor 必須拒絕：
 
 ```text
 storageRoot
-└─ ...
+└─ original
 ```
 
 Directory 建立應具備 idempotent 行為：
@@ -151,44 +158,54 @@ Directory 建立應具備 idempotent 行為：
 
 ---
 
-# 7. Storage Path Safety
+# 7. Storage Path Safety / Naming
 
-Client 提供的原始檔名：
+`LocalFileStorageService` 自行產生 `Guid.NewGuid().ToString("N")` 作為 Storage Identifier。
 
-```text
-OriginalFileName
-```
+- 不使用 OriginalFileName 作為 Storage Path。
+- 不保留原始副檔名。
+- 不進行 Filename Sanitization。
+- 不新增 `IFileStorageService` 參數。
 
-不得直接當成本機 Storage Path。
+目的檔案位於 Constructor 注入的 `storageRoot` 下的 `original` 子目錄。
 
-例如不得直接：
-
-```text
-storageRoot + file.FileName
-```
-
-原因是原始檔名屬於不可信輸入。
-
-本 Task 不負責 Filename Sanitization。
-
-若既有 `IFileStorageService` Contract 已提供：
+`SaveAsync` 回傳：
 
 ```text
-storedFileName
-storageKey
-relativePath
+original/{guid}
 ```
 
-等安全 Storage Identifier，必須以該值為準。
+其中 `{guid}` 為上述 Identifier。StoredPath 為跨平台相對路徑，固定使用 `/` 作為邏輯路徑分隔符，不回傳 OS absolute path。
 
-若現有 Contract **只有原始檔案，卻沒有任何安全 Storage Identifier 可以使用**，Agent 不得自行發明命名策略，必須：
+## 7.1 Deterministic Storage Identifier Test Seam
 
-```text
-Stop
-→ Report Contract Gap
-→ Propose Storage Naming Strategy
-→ Wait for Approval
-```
+- Public production constructor 維持只接受 `string storageRoot`。
+- Production 預設 identifier factory 必須使用 `Guid.NewGuid().ToString("N")`。
+- 為了讓 Unit Test 能穩定重現 Collision，允許在 Infrastructure implementation 內提供 `internal` constructor 或等價的 internal injection mechanism，注入 `Func<string> identifierFactory`。
+- 此 test seam 僅供 Infrastructure 內部測試能力使用，不得成為 public production API，也不得暴露到 API / Application Layer。
+- 不得修改 `IFileStorageService`、新增 Application Contract、Storage DTO 或 NuGet Package。
+
+## 7.2 Internal Test Seam Visibility
+
+`PhotoPlatform.Infrastructure` 與 `PhotoPlatform.UnitTests` 為不同 assembly。允許 Infrastructure 將 internal members 對 `PhotoPlatform.UnitTests` 開放測試可見性，以存取 §7.1 的 identifier factory test seam。
+
+建議使用 .NET 內建的 `InternalsVisibleTo`，實作時以下方式只能擇一，不得重複設定：
+
+1. Assembly-level `InternalsVisibleTo` attribute，例如：
+
+   ```csharp
+   [assembly: InternalsVisibleTo("PhotoPlatform.UnitTests")]
+   ```
+
+2. 等價的 project-level / csproj `InternalsVisibleTo` 設定。
+
+此規則僅用於 Unit Test 存取 Infrastructure internal test seam，不得因此：
+
+- 將 test seam 改為 public，或新增 public constructor 供測試使用。
+- 將 identifier factory 暴露到 API / Application Layer。
+- 修改 `IFileStorageService` 或 Application Contract。
+- 新增 Production-facing API、Application-level abstraction 或 NuGet Package。
+- 使用 Reflection 繞過 internal 存取限制。
 
 ---
 
@@ -200,10 +217,10 @@ Stop
 收到來源 Stream
 → Resolve safe destination path
 → 建立必要 Directory
-→ 建立 destination FileStream
+→ 以原子式 CreateNew semantics 建立 destination FileStream
 → Copy source stream to destination
 → Flush / complete write
-→ Return existing contract result
+→ 回傳 original/{guid} 相對 StoredPath
 ```
 
 Service 可以 Dispose：
@@ -230,7 +247,7 @@ Source Stream 的生命週期由 Caller 負責。
 using var source = ...
 ```
 
-如果 Source Stream 是由 `IUploadFile.OpenReadStream()` 取得，而現有 Contract 明確規定 caller ownership，Storage Service 不得 Dispose 該 Stream。
+由 `IUploadFile.OpenReadStream()` 取得的 Source Stream 明確屬於 caller-owned resource，Storage Service 不得 Dispose 該 Stream。
 
 Service 自己建立的：
 
@@ -244,91 +261,65 @@ FileStream
 
 # 10. Stream Position
 
-不得假設 Source Stream 一定從：
+`IUploadFile.OpenReadStream()` 的已核准語意：
+
+- 每次呼叫都必須提供完整檔案內容，並從檔案開頭開始讀取。
+- 不要求每次回傳相同 Stream instance。
+- 對 Non-seekable Stream，每次呼叫仍必須取得從完整內容開頭開始的來源，不得接續已消耗的內容。
+- Consumer 不負責 Dispose caller-owned source Stream。
+
+若 Source Stream 可 Seek，Storage 必須：
 
 ```text
-Position = 0
+記錄原本 Position
+→ 從 Position 0 複製完整內容
+→ 完成或失敗後恢復原本 Position
 ```
 
-開始，除非既有 Contract 已明確保證。
-
-如果既有 Storage Contract 要求儲存「完整檔案」，而 Source Stream：
-
-```text
-CanSeek == true
-```
-
-則應依既有 MOD-01 / Contract 規則處理 Position。
-
-若現有文件未定義 Storage Service 應：
-
-- 從目前 Position 開始 Copy
-- 或強制回到 Position 0
-
-Agent 不得自行決定。
-
-必須先：
-
-```text
-Report Ambiguity
-→ Propose Behavior
-→ Wait for Approval
-```
+Non-seekable Stream 不拒絕，依 OpenReadStream Contract 從目前來源開頭開始複製，不要求 Position Restore。
 
 ---
 
 # 11. Existing File / Collision
 
-Local Storage 不得靜默覆寫既有檔案。
+Destination file 必須使用原子式 CreateNew semantics。
 
-如果目的路徑已存在：
-
-> 必須依現有 Storage Contract / MOD-01 Collision Rule 處理。
-
-如果目前 Contract 沒有定義 Collision：
-
-```text
-Agent must not invent numeric suffix,
-GUID rename,
-overwrite,
-or skip behavior.
-```
-
-必須回報規格缺口。
+- 不允許覆寫既有檔案。
+- 不自動加 Numeric Suffix。
+- 不自行重新命名或 Retry。
+- 發生 Collision 時，讓 `IOException` 原樣向外傳遞。
+- 未成功建立 destination 時，不得將既存檔案視為本次 Save 的 partial file 刪除。
 
 ---
 
 # 12. Delete Behavior
 
-使用既有：
+使用既有 `IFileStorageService.DeleteAsync(string storedPath, CancellationToken cancellationToken)` Contract。
+
+- DeleteAsync 僅允許操作 `storageRoot` 範圍內的 StoredPath。
+- 目標檔案不存在時視為成功，使 Delete 具備 idempotent semantics。
+- `null`、empty、whitespace 或非法／逃離 root 的 storedPath 視為 Argument validation failure。
+- 使用 `ArgumentException` family，不建立自訂 Exception。
+- 不得允許 traversal、absolute path、drive path 或 UNC path 導致刪除 Storage Root 外的檔案。
+
+本 Task 的 DeleteAsync 僅接受 LocalFileStorageService 所產生的 StoredPath 格式：
 
 ```text
-IFileStorageService.DeleteAsync(...)
+original/{identifier}
 ```
 
-Contract。
-
-Delete 只能操作 Storage Root 允許範圍內的檔案。
-
-不得允許：
-
-```text
-../
-absolute path
-root escape
-```
-
-導致刪除 Storage Root 外的檔案。
-
-如果目標檔案不存在，其行為必須依既有 Contract。
-
-若 Contract 未定義：
-
-> Agent 必須先回報，不得自行決定「忽略」或「throw」。
+- `identifier` 必須符合 Guid `N` format：32 個 hexadecimal characters，不包含 dash。
+- 不包含副檔名或其他 path segment；邏輯路徑分隔符固定為 `/`。
+- 合法例：`original/550e8400e29b41d4a716446655440000`。
+- 即使仍位於 storageRoot 內，`temp/...`、`processed/...`、`foo/bar`、`original/hello`、`original/550e8400-e29b-41d4-a716-446655440000`、`original/file.jpg` 也必須拒絕。
+- 上述不合法格式使用 `ArgumentException` family，不建立自訂 Exception。
+- 僅合法 StoredPath 指向的檔案不存在時視為成功；其他實際 I/O failure 原樣向外傳遞。
 
 ---
 
 # 13. Path Traversal Protection
+
+DeleteAsync 除了檢查 Root 邊界，也必須符合 §12 的 `original/{identifier}` 格式，不得將 Root 內其他目錄或任意檔案視為合法刪除目標。
 
 任何用來產生實際 Storage Path 的值都必須防止：
 
@@ -382,7 +373,7 @@ OperationCanceledException
 
 # 15. Partial File Cleanup
 
-如果寫檔過程中發生：
+如果 Save 過程失敗或取消，例如：
 
 ```text
 IOException
@@ -390,7 +381,7 @@ Cancellation
 Other supported write failure
 ```
 
-且 Destination File 已被建立但尚未完成：
+且本次操作已建立 Destination File：
 
 > 不得留下明確的 incomplete / partial file。
 
@@ -404,7 +395,7 @@ Cleanup 只能處理：
 
 如果 Cleanup 本身失敗：
 
-> 不得掩蓋原始 cancellation 或 write failure。
+> 不得掩蓋原始 exception，包括 cancellation 或 write failure。
 
 ---
 
@@ -429,9 +420,9 @@ OperationCanceledException
 
 向外傳遞。
 
-對實際 I/O Error 的處理必須符合既有 `IFileStorageService` Contract。
+IOException 與其他既有 I/O exception 不包裝、不轉 ErrorCode，原樣向外傳遞。
 
-不得自行建立新的 ErrorCode，除非 Module Spec 已定義。
+本 Task 不建立新的 ErrorCode 或自訂 Exception；HTTP Error Mapping 留給後續 API Task。
 
 ---
 
@@ -484,7 +475,7 @@ FileValidationService
 - 可以儲存檔案
 - Directory 不存在時可建立
 - 儲存後內容與 Source bytes 相同
-- 回傳值符合既有 Contract
+- 回傳值為 original/{guid}，guid 為 N 格式，使用 `/` 且不含原始檔名或副檔名
 - Source Stream 沒有被 Dispose
 
 ## 18.3 Existing Directory
@@ -524,17 +515,40 @@ Save 仍可正常執行
 
 - 合法 Storage File 可以刪除
 - 不允許刪除 Root 外檔案
-- missing file 行為符合既有 Contract
+- missing file 視為成功，重複 Delete 具備 idempotent semantics
+- null、empty、whitespace、非法或逃離 root 的 storedPath 拋出 ArgumentException family
+- 僅接受 `original/` 加上 Guid N format 的 32 個 hexadecimal characters，且沒有副檔名或其他 path segment
+- 拒絕 `temp/...`、`processed/...`、`foo/bar`、`original/hello`、帶 dash 的 Guid 與 `original/file.jpg`
+- 拒絕 traversal、absolute path、drive path、UNC path 與 root escape
+- 其他實際 I/O failure 原樣向外傳遞
 
 ## 18.8 Collision
 
-如果現有 Contract 已定義 Collision：
+驗證原子式 CreateNew semantics：
 
-> 測試對應規則。
+- `PhotoPlatform.UnitTests` 必須透過 §7.2 核准的 internal visibility mechanism 存取 internal constructor 或等價的 identifierFactory test seam。
+- 不得使用 Reflection 繞過 internal，不得為此建立 public constructor 或新的 Application-level abstraction。
+- 透過 §7.1 的 internal test seam 注入固定 identifier，例如 `550e8400e29b41d4a716446655440000`。
+- 在測試專用 storageRoot 下預先建立 `original/550e8400e29b41d4a716446655440000`，再呼叫 SaveAsync，穩定製造 Collision，不依賴隨機 GUID 碰撞。
+- Collision 時 IOException 原樣向外傳遞。
+- 既有檔案內容不被覆寫，亦不被 Cleanup 刪除。
+- 不自動加 Numeric Suffix、重新命名或 Retry。
+- 確認不重新產生 identifier，identifier factory 不因 Collision 被重複呼叫。
 
-如果沒有定義：
+## 18.9 Stream Position / Ownership
 
-> 不得自行新增 Collision 行為或測試假設。
+- 可 Seek 的來源從 Position 0 複製，完成或失敗後恢復原本 Position。
+- Non-seekable 來源依 OpenReadStream Contract 提供完整內容，不被拒絕。
+- 呼叫端負責提供符合每次從頭讀取語意的來源；Storage 不 Dispose source Stream。
+
+## 18.10 Cleanup Failure
+
+- Save 失敗或取消後，僅嘗試清理本次建立的 destination。
+- Cleanup 自身失敗不得掩蓋原始 exception。
+- 上述 Production Behavior 為必要要求，不因測試方式而放寬。
+- 若能在不新增 Production abstraction、NuGet Package 或額外 File System abstraction 的前提下 deterministic 模擬 Cleanup Failure，應建立對應 Unit Test。
+- 不得單純為此測試新增 `IFileSystem`、FileSystem wrapper、Mock filesystem framework 或新的 Production-level abstraction。
+- 若目前 Task Scope 內無法 deterministic 模擬，可透過 code review / integration behavior 驗證，不得為了測試擴大 Scope。
 
 ---
 
@@ -639,7 +653,15 @@ TASK-05 完成條件：
 □ Destination Stream 正確 Dispose
 □ Cancellation 正確向外傳遞
 □ Partial file cleanup 正確
-□ Unit Tests 完成
+□ Cleanup failure 不掩蓋原始 exception，依 §18.10 驗證
+□ Public production constructor 僅接受 string storageRoot，預設使用 GUID N identifier
+□ 透過 internal test seam 完成 deterministic Collision Test
+□ Internal test seam 不成為 public production API
+□ PhotoPlatform.UnitTests 可透過 InternalsVisibleTo 或等價核准方式存取 test seam，僅設定一次
+□ 不使用 Reflection 繞過 internal
+□ 未修改 IFileStorageService，未新增 NuGet Package
+□ Delete 僅接受 original/{identifier}，identifier 符合 Guid N format
+□ Unit Tests 完成（Cleanup Failure 的驗證方式依 §18.10）
 □ Existing tests 全部通過
 □ dotnet build 成功
 □ dotnet test 成功
@@ -694,6 +716,10 @@ Stop
 # 24. Agent Implementation Constraints
 
 Agent 僅能依照本 Task、MOD-01、System-Level Specification、Requirements 與 AGENTS.md 進行實作。
+
+§7.1 核准的 identifier factory test seam 僅限 Infrastructure internal implementation，不改變 public production constructor 或 Application Contract；不得為 Cleanup Failure Test 引入額外 File System abstraction。
+
+跨 assembly 的測試存取僅使用 §7.2 核准方式，相關檔案變更限定於 §3 所列範圍，不得將 test seam 公開或使用 Reflection 繞過存取限制。
 
 不得：
 
