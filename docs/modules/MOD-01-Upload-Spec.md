@@ -581,6 +581,17 @@ GcsFileStorage
 
 ---
 
+### IUploadFile / Source Stream Contract
+
+- 每次呼叫 `IUploadFile.OpenReadStream()` 都必須提供完整檔案內容，並從檔案開頭開始讀取。
+- 不要求每次回傳相同 Stream instance。
+- Non-seekable Stream 每次呼叫仍必須取得從完整內容開頭開始的來源，不得接續已消耗的內容。
+- Source Stream 的生命週期由呼叫端負責，Consumer 不得 Dispose caller-owned source Stream。
+- Storage 對可 Seek 的 Stream，必須記錄原本 Position，從 Position 0 複製，並在完成或失敗後恢復原本 Position。
+- Storage 不拒絕 Non-seekable Stream；依上述 OpenReadStream Contract，從目前來源開頭開始複製。
+
+---
+
 ### IProcessingQueue
 
 建立 Processing Job 後，透過 Queue 將工作交給 Background Processing。
@@ -645,6 +656,39 @@ Upload Module 的 Original File 儲存於：
 ```
 
 Production 使用對應 Cloud Storage 結構，但 Application Layer 不直接依賴 GCS API。
+
+### Local Storage Naming / StoredPath
+
+- `LocalFileStorageService` 由 Constructor 注入 `storageRoot`，不得硬編碼 OS 絕對路徑。
+- 原始上傳檔案儲存於 `storageRoot` 下的 `original` 子目錄；上述 `/storage` 為目錄結構示意。
+- Service 自行產生 `Guid.NewGuid().ToString("N")` 作為 Storage Identifier。
+- 不使用 OriginalFileName 作為 Storage Path，亦不保留原始副檔名。
+- `SaveAsync` 回傳 `original/{guid}`，其中 `{guid}` 為上述 Identifier。
+- StoredPath 是相對於 `storageRoot` 的跨平台邏輯路徑，固定使用 `/`，不回傳 OS absolute path。
+- 沿用既有 `IFileStorageService` Signature，不新增參數或 Storage DTO。
+
+### Local Storage Collision
+
+- Destination file 必須使用原子式 CreateNew semantics，不允許覆寫既有檔案。
+- 發生 Collision 時，`IOException` 原樣向外傳遞。
+- 不自動加 Numeric Suffix，不重新命名或 Retry。
+
+### Local Storage Delete
+
+- `DeleteAsync` 僅允許操作 `storageRoot` 範圍內的 StoredPath。
+- 目標檔案不存在時視為成功，使 Delete 具備 idempotent semantics。
+- `null`、empty、whitespace 或非法／逃離 root 的 storedPath 屬於 Argument validation failure，使用 `ArgumentException` family。
+- 不建立自訂 Exception；不得允許 traversal、absolute path、drive path 或 UNC path 導致 root escape。
+
+### Local Storage Exceptions / Partial File Cleanup
+
+- `OperationCanceledException` 原樣向外傳遞。
+- `IOException` 與其他既有 I/O exception 不包裝、不轉 ErrorCode，原樣向外傳遞。
+- HTTP Error Mapping 留給後續 API Task。
+- Save 過程失敗或取消後，若本次操作已建立 destination file，必須嘗試刪除 partial file。
+- Cleanup 只能刪除本次 Save 建立的 destination，不得刪除既存檔案。
+- Cleanup failure 不得掩蓋原始 exception。
+- Storage 必須正確 Dispose 自己建立的 destination Stream，不得 Dispose caller-owned source Stream。
 
 ---
 
