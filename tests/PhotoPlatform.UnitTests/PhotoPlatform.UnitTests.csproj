@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/PhotoPlatform.Domain/PhotoPlatform.Domain.csproj" />
+    <ProjectReference Include="../../src/PhotoPlatform.Application/PhotoPlatform.Application.csproj" />
   </ItemGroup>
 
 </Project>
