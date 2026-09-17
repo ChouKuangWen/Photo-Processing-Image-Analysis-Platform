@@ -827,20 +827,30 @@ ProcessingLogs
 
 ---
 
+### SQL Server Physical Mapping
+
+- Database Provider 為 Microsoft SQL Server。
+- Guid / UUID 的 physical type 為 `uniqueidentifier`。
+- DateTimeOffset（含 nullable 時間欄位）的 physical type 為 `datetimeoffset(7)`。
+- SQL Server `timestamp` 不得用於 CreatedAt、UpdatedAt、StartedAt、CompletedAt 或 TakenAt。
+- OriginalFileName、NewFileName、CameraModel、LocationName、ErrorMessage 使用 `nvarchar` 保存 Unicode；已有長度限制維持不變。
+- ProcessingJobs.ErrorMessage 的 SQL Server physical mapping 為 `nvarchar(max) NULL`；此決策不新增 ErrorMessage 業務長度限制。
+- StoredPath、MimeType、SHA256、Status、Workflow、ErrorCode 維持既有 `varchar`；其他欄位型別與長度維持本節表格定義。
+
 ## 2.2 Batches
 
 ### Table: `batches`
 
 | 欄位 | 型別 | Nullable | Key / Index | Default | 說明 |
 |---|---|---:|---|---|---|
-| Id | UUID | No | PK | — | Batch ID |
+| Id | UNIQUEIDENTIFIER | No | PK | — | Batch ID |
 | TotalCount | INT | No | — | 0 | 圖片總數 |
 | ProcessedCount | INT | No | — | 0 | 已處理數量 |
 | SuccessCount | INT | No | — | 0 | 成功數量 |
 | FailedCount | INT | No | — | 0 | 失敗數量 |
 | Status | VARCHAR(30) | No | Index | — | Batch 狀態 |
-| CreatedAt | TIMESTAMP | No | — | — | 建立時間 |
-| CompletedAt | TIMESTAMP | Yes | — | NULL | 完成時間 |
+| CreatedAt | DATETIMEOFFSET(7) | No | — | — | 建立時間 |
+| CompletedAt | DATETIMEOFFSET(7) | Yes | — | NULL | 完成時間 |
 
 Relationship：
 
@@ -857,24 +867,24 @@ Batches 1 ─── N Images
 | 欄位 | 型別 | Nullable | Key / Index | Default | 說明 |
 |---|---|---:|---|---|---|
 | Id | BIGINT | No | PK | Identity | Image ID |
-| BatchId | UUID | No | FK, Index | — | 所屬 Batch |
-| OriginalFileName | VARCHAR(255) | No | — | — | 原始檔名 |
+| BatchId | UNIQUEIDENTIFIER | No | FK, Index | — | 所屬 Batch |
+| OriginalFileName | NVARCHAR(255) | No | — | — | 原始檔名 |
 | StoredPath | VARCHAR(500) | No | — | — | Storage Reference |
-| NewFileName | VARCHAR(255) | Yes | — | NULL | 新檔名 |
+| NewFileName | NVARCHAR(255) | Yes | — | NULL | 新檔名 |
 | FileSize | BIGINT | No | — | — | 檔案大小 |
 | MimeType | VARCHAR(100) | No | — | — | MIME Type |
 | SHA256 | VARCHAR(64) | Yes | Index | NULL | SHA-256 |
-| TakenAt | TIMESTAMP | Yes | Index | NULL | 拍攝時間 |
-| CameraModel | VARCHAR(100) | Yes | — | NULL | 相機型號 |
+| TakenAt | DATETIMEOFFSET(7) | Yes | Index | NULL | 拍攝時間 |
+| CameraModel | NVARCHAR(100) | Yes | — | NULL | 相機型號 |
 | ISO | INT | Yes | — | NULL | ISO |
 | ShutterSpeed | VARCHAR(50) | Yes | — | NULL | 快門速度 |
 | Aperture | VARCHAR(50) | Yes | — | NULL | 光圈 |
 | Latitude | DECIMAL(10,7) | Yes | — | NULL | 緯度 |
 | Longitude | DECIMAL(10,7) | Yes | — | NULL | 經度 |
-| LocationName | VARCHAR(150) | Yes | — | NULL | 地點名稱 |
+| LocationName | NVARCHAR(150) | Yes | — | NULL | 地點名稱 |
 | Status | VARCHAR(30) | No | Index | — | Image 狀態 |
-| CreatedAt | TIMESTAMP | No | — | — | 建立時間 |
-| UpdatedAt | TIMESTAMP | No | — | — | 更新時間 |
+| CreatedAt | DATETIMEOFFSET(7) | No | — | — | 建立時間 |
+| UpdatedAt | DATETIMEOFFSET(7) | No | — | — | 更新時間 |
 
 Relationship：
 
@@ -892,15 +902,15 @@ Images N ─── 1 Batches
 |---|---|---:|---|---|---|
 | Id | BIGINT | No | PK | Identity | Job ID |
 | ImageId | BIGINT | No | FK, Index | — | Image ID |
-| BatchId | UUID | No | FK, Index | — | Batch ID |
+| BatchId | UNIQUEIDENTIFIER | No | FK, Index | — | Batch ID |
 | Workflow | VARCHAR(30) | No | — | — | Workflow |
 | Status | VARCHAR(30) | No | Index | — | Job 狀態 |
 | RetryCount | INT | No | — | 0 | 重試次數 |
-| CreatedAt | TIMESTAMP | No | — | — | 建立時間 |
-| StartedAt | TIMESTAMP | Yes | — | NULL | 開始時間 |
-| CompletedAt | TIMESTAMP | Yes | — | NULL | 完成時間 |
+| CreatedAt | DATETIMEOFFSET(7) | No | — | — | 建立時間 |
+| StartedAt | DATETIMEOFFSET(7) | Yes | — | NULL | 開始時間 |
+| CompletedAt | DATETIMEOFFSET(7) | Yes | — | NULL | 完成時間 |
 | ErrorCode | VARCHAR(50) | Yes | — | NULL | 錯誤代碼 |
-| ErrorMessage | TEXT | Yes | — | NULL | 錯誤訊息 |
+| ErrorMessage | NVARCHAR(MAX) | Yes | — | NULL | 錯誤訊息 |
 
 Relationships：
 
@@ -958,6 +968,14 @@ ProcessingJobs.Status
 ```
 
 ---
+
+### Foreign Key DeleteBehavior
+
+以下三條關聯必須明確設定 `DeleteBehavior.NoAction`，不得依賴 EF Core default behavior：
+
+- Batch → Images（Images.BatchId → Batches.Id）。
+- Image → ProcessingJobs（ProcessingJobs.ImageId → Images.Id）。
+- Batch → ProcessingJobs（ProcessingJobs.BatchId → Batches.Id）。
 
 ## 2.6 EF Core Mapping
 
