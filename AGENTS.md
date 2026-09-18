@@ -60,6 +60,12 @@ Existing Code
 
 不得只閱讀 Task 就直接開始 Implementation。
 
+`docs/INDEX.md` 提供文件與程式碼的定位指引；可用來快速找到本 Task 的相關內容，但不得取代上述必讀文件、改變閱讀順序或變更文件優先權。
+
+同一 Task 的 Pre-Implementation Review 已依上述順序完成閱讀與一致性檢查，且結果為 `READY FOR IMPLEMENTATION` 時，經使用者批准的 Task Implementation 可先使用 Current Task、Approved Review Result、Implementation Context 與目標程式碼。開始實作前須確認 Review 的已讀來源與版本基準可核對、相關來源未變動，且 Context 足以涵蓋本次 Scope；符合條件時不必重新完整閱讀已審查的規格。
+
+若基準不足、Context 不足或相關來源有變動，應依 `docs/INDEX.md` 回查受影響的原始來源；若變更可能使原 `READY FOR IMPLEMENTATION` 失效，須停止、回報、重新審查受影響範圍並等待批准。原始規格的優先權與衝突處理規則不變。
+
 ---
 
 # 3. Source of Truth

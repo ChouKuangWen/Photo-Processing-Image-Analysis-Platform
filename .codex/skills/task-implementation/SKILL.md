@@ -45,17 +45,38 @@ DO NOT IMPLEMENT
 
 ---
 
-## Authoritative Sources
+## Authoritative Sources and Review Validity
 
-實作前必須重新確認：
+原始規格與 Contract 的權威性不變；`docs/INDEX.md` 只協助定位來源。開始實作時優先使用：
 
-1. `AGENTS.md`
-2. `Requirements.md`
-3. `docs/System-Level-Specification.md`
-4. Relevant Module Specification
-5. Current TASK Specification
-6. Existing contracts and related source code
-7. Approved Pre-Implementation Review result
+```text
+Current TASK
++ Approved Pre-Implementation Review result
++ Implementation Context
++ Target source files
+```
+
+先以 Review 記錄的已讀來源與版本基準，核對相關 Specification、Contract、Code 及工作樹變更。Review Base Commit 只能證明已提交版本；若 Review 時有未提交變更，也必須能核對當時的內容。不能確認未變動時，不得直接沿用摘要。
+
+Review 已通過、使用者已批准、相關來源可確認未變動，且 Implementation Context 足夠時，不預設重新完整閱讀 Review 已確認的 `Requirements.md`、System-Level Specification 或 Relevant Module Specification。
+
+只有下列情況才依 `docs/INDEX.md` 回查受影響的原始來源，不無條件重讀全部文件：
+
+- Implementation Context 不足，或缺少可信的 Review 版本基準
+- Review 後相關 Specification、Contract 或 Code 發生變更
+- 發現新的 Contract Gap、Dependency 或 Conflict
+- 實作需要超出原核准 Scope
+
+若變更或新發現可能使原 `READY FOR IMPLEMENTATION` 結論失效：
+
+```text
+Stop
+→ Report
+→ Re-review affected scope
+→ Wait for approval
+```
+
+不得以舊 Review 結果繼續實作。回查與重新審查仍須遵守 `AGENTS.md` 的文件優先權和衝突規則。
 
 ---
 

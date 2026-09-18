@@ -238,6 +238,21 @@ READY FOR IMPLEMENTATION
 ### Risks / Notes
 - Non-blocking implementation considerations only
 
+### Implementation Context
+
+提供可供後續 Implementation 沿用的精簡摘要，至少記錄：
+
+- TASK / Module
+- Confirmed Scope 與 Out-of-Scope
+- Contracts Reused
+- Important Constraints，包括 Architecture、API、Database、Dependency 與 Testing 中本 Task 相關者
+- Expected Changes
+- Sources Reviewed：實際已讀來源及路徑
+- Review Base Commit / 可核對版本基準：記錄 Review 時的 commit，並標明相關來源的未提交變更；若有未提交變更，須提供可比對的版本資訊，不能只以 commit 代表其內容
+- Conflict Status：確認無 blocking conflict 或 ambiguity
+
+Implementation Context 是審查結果的導航與摘要，不取代原始 Specification。若後續無法核對來源版本或相關來源已變動，Implementation 應依 `AGENTS.md` 回查受影響來源；原 `READY FOR IMPLEMENTATION` 可能失效時，須重新審查受影響範圍並等待批准。
+
 最後明確寫：
 
 ```text
