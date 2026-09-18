@@ -48,4 +48,16 @@ public class Image
 
     // 建立時與 CreatedAt 相同。
     public DateTimeOffset UpdatedAt { get; private set; }
+
+    // 對齊既有 Schema 的選填結果欄位；此處只定義資料形狀，命名、雜湊與中繼資料由後續模組產生。
+    public string? NewFileName { get; private set; }
+    public string? SHA256 { get; private set; }
+    public DateTimeOffset? TakenAt { get; private set; }
+    public string? CameraModel { get; private set; }
+    public int? ISO { get; private set; }
+    public string? ShutterSpeed { get; private set; }
+    public string? Aperture { get; private set; }
+    public decimal? Latitude { get; private set; }
+    public decimal? Longitude { get; private set; }
+    public string? LocationName { get; private set; }
 }
