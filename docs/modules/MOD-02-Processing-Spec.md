@@ -206,9 +206,23 @@ System.Threading.Channels
 
 Queue 使用 **Bounded Channel**，避免工作無限制增加造成記憶體持續成長。
 
-Queue Item 至少包含：
+### Capacity / Backpressure
 
-- JobId
+- Capacity 由設定提供，預設為 `100`。
+- Capacity 必須大於 `0`；不合法的設定必須拒絕。
+- 使用 `BoundedChannelFullMode.Wait`。
+- Queue 滿載時，Producer 必須非同步等待可用空間，等待期間支援 `CancellationToken`，取消必須向上傳遞。
+- 不使用 `DropWrite`、`DropOldest` 或 `DropNewest`，不得因 Queue 滿載而丟棄工作。
+
+### Queue Item
+
+沿用現有 `ProcessingJob` Contract，不新增 `ProcessingQueueItem` DTO，不修改既有 `IProcessingQueue` signature。
+
+Queue 僅負責傳遞 `ProcessingJob`，不得修改其狀態、`RetryCount` 或 Error 資訊。
+
+Consumer 所需的識別資訊由既有 `ProcessingJob` 提供：
+
+- JobId（`ProcessingJob.Id`）
 - ImageId
 - BatchId
 - Workflow
