@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
     <ProjectReference Include="..\PhotoPlatform.Application\PhotoPlatform.Application.csproj" />
+    <ProjectReference Include="..\PhotoPlatform.Infrastructure\PhotoPlatform.Infrastructure.csproj" />
   </ItemGroup>
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
