@@ -102,7 +102,8 @@ public sealed class ChannelProcessingQueueTests
     }
 
     [Fact]
-    // 容量設為 1 以觸發 Writer 等待；取消後不得偷偷入列，也不能移除原有 Job。
+    /* Queue 已滿時，第 2 個 Writer 被取消後，不能偷偷把 Job2 放進去、
+       不能把原本 Job1 擠掉，而且 Queue 之後還要能正常處理 Job3。*/
     public async Task ConfiguredCapacity_CanceledWriterDoesNotInsertOrDropItems()
     {
         // 刻意指定 Capacity = 1，只需一筆工作就能填滿 Queue，隔離滿載情境。
@@ -110,7 +111,7 @@ public sealed class ChannelProcessingQueueTests
         var queue = new ChannelProcessingQueue(new ProcessingQueueOptions { Capacity = 1 });
         using var canceled = new CancellationTokenSource();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var first = Job(1);
+        var first = Job(1);S
         var next = Job(3);
         await queue.EnqueueAsync(first, timeout.Token);
         // 第一筆已占滿空間，第二筆應依 FullMode.Wait 留在等待狀態。
