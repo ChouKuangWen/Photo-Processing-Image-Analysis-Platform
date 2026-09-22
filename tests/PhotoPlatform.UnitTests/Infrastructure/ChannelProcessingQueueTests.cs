@@ -111,7 +111,7 @@ public sealed class ChannelProcessingQueueTests
         var queue = new ChannelProcessingQueue(new ProcessingQueueOptions { Capacity = 1 });
         using var canceled = new CancellationTokenSource();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var first = Job(1);S
+        var first = Job(1);
         var next = Job(3);
         await queue.EnqueueAsync(first, timeout.Token);
         // 第一筆已占滿空間，第二筆應依 FullMode.Wait 留在等待狀態。
