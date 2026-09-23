@@ -23,9 +23,11 @@ Upload Module 負責圖片進入系統的完整入口流程。
     ↓
 驗證 Request / File
     ↓
-建立 Batch
-    ↓
 儲存 Original File
+    ↓
+Begin Database Transaction
+    ↓
+建立 Batch
     ↓
 建立 Image
     ↓
@@ -163,9 +165,11 @@ Request Validation
   ↓
 File Validation
   ↓
-Create Batch
-  ↓
 Store Original Files
+  ↓
+Begin Database Transaction
+  ↓
+Create Batch
   ↓
 Create Image Records
   ↓
@@ -323,7 +327,7 @@ HTTP 202 Accepted
 
 ### BR-02 Preserve Original File
 
-Original File 在 Processing 尚未確認完成前不得刪除。
+已 Commit 接受的 Original File 在 Processing 尚未確認完成前不得刪除。Commit 前失敗的本次存檔依 §1.8 補償，不屬於已接受圖片。
 
 Original File 是後續：
 
@@ -463,9 +467,11 @@ Storage 不屬於 Database Transaction。
 ```text
 Validate
    ↓
-Create Batch
-   ↓
 Store File
+   ↓
+Begin Database Transaction
+   ↓
+Create Batch
    ↓
 Create Image
    ↓
@@ -502,9 +508,29 @@ Delete Stored File
 
 ### Partial Upload
 
-多檔案 Upload 發生部分失敗時，處理策略由 System-Level Specification 定義。
+多檔案 Upload 依 System-Level §1.26 的 Upload Acceptance / Background Processing Boundary：Commit 前 Request-level atomicity；Commit 後 Image-level failure isolation。
 
 Upload Module 不得自行定義與 System-Level Specification 衝突的行為。
+
+---
+
+### Upload Acceptance / Background Processing Boundary
+
+正式維持流程：Validation → 全部 Storage Save → Begin Database Transaction → Batch / Image Save → ProcessingJob Save → Commit → Queue Enqueue。
+
+Database Commit 成功前，單次 Upload Request 採 Request-level atomic behavior。Validation、Storage Save、Persistence 或 Commit 任一必要步驟失敗，整個 Request 失敗，不接受部分成功的 Batch / Image / ProcessingJob，並須清理本次成功存檔以避免 orphan files。
+
+| 階段 | 必要處理 |
+|---|---|
+| Transaction 尚未建立 | Storage Compensation；No Database Rollback |
+| Transaction 已建立、Commit 尚未成功 | 嘗試 Database Rollback，再逐一嘗試 Storage Compensation |
+| Commit 已成功 | No Rollback；No Storage Compensation，包括 Queue failure 與 Commit 後 cancellation |
+
+Cleanup 為 best-effort：單筆失敗不得阻止其餘 cleanup，不得覆蓋 original exception；必須安全記錄失敗，不假設外部資源失敗時仍可保證刪除成功。Validation 失敗沒有 Storage / Database side effect。
+
+Commit 成功後採 Image-level failure isolation；不得因單張後續 processing failure 撤銷整批已接受資料或不必要地影響其他 Image。
+
+Commit 後 Queue failure 必須保留 DB / Storage、Failure 可觀察、Exception 向上傳遞。MOD-01 不宣稱 automatic requeue、retry scheduler、每個 Pending Job 的 startup recovery 或 durable queue recovery；Recovery 屬後續 Module。
 
 ---
 
@@ -694,19 +720,7 @@ Production 使用對應 Cloud Storage 結構，但 Application Layer 不直接�
 
 ## 1.11 Logging & Observability
 
-Upload Module 必須記錄：
-
-```text
-TraceId
-BatchId
-ImageId
-OriginalFileName
-FileSize
-Workflow
-Status
-DurationMs
-ErrorCode
-```
+Upload Module 安全 logging 依 §1.12 的白名單：必要 identifier（TraceId、BatchId、ImageId、JobId，存在時）、logical key、failure stage、sanitized type / code。事件名稱區分操作；不輸出 OriginalFileName、任意原始文字或 exception object。
 
 不得記錄：
 
@@ -759,6 +773,37 @@ Standard API Error Response
 ```
 
 Application Service 不得將 Infrastructure Exception 原樣傳回 Client。
+
+---
+
+### Application → API Failure Classification
+
+Category / Stage 是正式語意契約；具體 implementation type 留待 TASK Implementation。由 Application 操作邊界明確識別來源，不得僅從 IOException 等 CLR type、message 或 stack 猜測。可用最小分類載體保存 original exception，不改既有成功 DTO，不將 HTTP 型別引入 Application。
+
+| Category | Stage / 來源 | 外部映射 |
+|---|---|---|
+| Validation | RequestValidation / FileValidation | HTTP 400 / 既有 validation code |
+| Storage | Upload acceptance 的 StorageSave | HTTP 500 / STORAGE_ERROR |
+| Internal | DatabaseBegin / DatabaseSave / DatabaseCommit / QueueEnqueue / Unexpected | HTTP 500 / INTERNAL_ERROR |
+| NotFound | BatchQuery 查無資料 | HTTP 404 / BATCH_NOT_FOUND |
+
+原始 exception 保留供內部流程與診斷使用，但不得將 raw message / stack 寫入 Log 或 API。DatabaseRollback / StorageCompensation / TransactionDispose 是次要 cleanup stages，不覆蓋原始 category 或 exception。Storage Save 未成功回傳時的 partial-file cleanup 仍屬 Storage implementation，不轉移至 Application、不掃描目錄猜測。
+
+Cancellation 正常向下傳遞並向上傳播，不轉 Validation failure；必要 cleanup 不因原 Request token 已取消而跳過。HTTP disconnect 不要求成功送達 response，也不新增自訂 cancellation status；仍維持 Commit 邊界。
+
+TASK-10 建立共用安全 exception handler / middleware，按 category 映射 §3.7 / §3.8 envelope；建立 / 沿用 ASP.NET Core request TraceIdentifier，error.traceId 必須存在。Safe message 使用受控內容，不取 raw exception message。
+
+### Logging Ownership / Security
+
+共用 abstraction 使用 Microsoft.Extensions.Logging / ILogger<T>；Application 不引用 Infrastructure。MOD-01 不安裝或綁定 Serilog provider；完整 provider integration 留待 MOD-09 / composition decision。
+
+- TASK-09 唯一記錄 Transaction failure、Rollback failure、Storage Compensation failure、Queue Enqueue failure 及 Upload acceptance failure stage 所需最小安全事件。
+- TASK-10 只擁有 HTTP boundary、request/result classification、exception mapping 與 TraceId；不重複上述 failure events。
+- TASK-11 重用同一 mechanism 與事件，補齊 observability baseline、query correlation 與缺少的觀察能力；不建立平行 abstraction、不重複 failure events。
+
+安全 failure diagnostic 欄位只允許必要 identifier（含 TraceId / BatchId / ImageId / JobId）、logical key、failure stage、sanitized type / code。禁止 raw Exception.Message、Stack Trace、SQL Detail、OS absolute path、JWT、Authorization Header、binary 或 secret。不得直接將原始 exception object 交给 logger 展開。Logical key 沿用 original/{guid}。
+
+Logging 欄位依上述白名單，不以 operation metadata 或任意文字欄位繞過安全限制。
 
 ---
 
@@ -1109,6 +1154,8 @@ workflow = Full
 
 ---
 
+workflow 為必填字串；缺少、空白或非法值回傳 HTTP 400 / INVALID_WORKFLOW，使用既有 validation error envelope，不得因 binding failure 落入 enum default value。
+
 ## 3.4 Request Validation
 
 必須驗證：
@@ -1222,6 +1269,12 @@ Response：
 | status | String | Batch 狀態 |
 
 ---
+
+### Batch Query Ownership / Progress Boundary
+
+TASK-11 首次提供 §3.6 read-only endpoint；MOD-09 重用 / 擴充同一 endpoint 與 contract，不建立第二套 API。讀取持久化 Batch aggregate，不以 Image / Job 清單取代，不新增 Batch lifecycle；Processing state 更新屬 MOD-02。
+
+progressPercentage 沿用 Decimal 與 ProcessedCount / TotalCount × 100，限制 0–100；TotalCount == 0 時為 0。不新增 precision / rounding model 或不同公式。
 
 ## 3.7 Error Response
 
@@ -1579,6 +1632,8 @@ Database
 
 ## 4.3 E2E / Playwright Test
 
+本節 UI / Dashboard / Processing Start 為後續 Module / dependency acceptance。TASK-12 執行 Backend HTTP E2E，不因 Frontend、Worker 真正 processing、Image Analysis、Retry / Recovery runtime 未完成而判 backend BLOCKED，也不將它們標記通過。
+
 UI 完成後使用 Playwright 驗證實際使用者流程。
 
 ### E2E-01 Upload Success
@@ -1912,6 +1967,8 @@ Request Specification Decision
 
 ## 7.4 Module Completion
 
+TASK-12 完成僅代表 MOD-01 Backend Acceptance：HTTP、Validation、Storage、Database、Transaction / Compensation、Queue enqueue boundary、Batch Query、Logging / Error Sanitization、Integration / E2E / Regression、request isolation / concurrency smoke test。以下 UI / Processing 流程及 E2E 條件依 §4.3 分期，不宣稱整個產品完成。
+
 Upload Module 完成後，應能提供：
 
 ```text
@@ -1923,9 +1980,11 @@ Upload
  ↓
 Validate
  ↓
-Create Batch
- ↓
 Store Original Files
+ ↓
+Begin Database Transaction
+ ↓
+Create Batch
  ↓
 Create Image Records
  ↓

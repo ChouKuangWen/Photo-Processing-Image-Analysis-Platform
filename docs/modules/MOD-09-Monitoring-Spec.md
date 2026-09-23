@@ -182,6 +182,8 @@ ProgressPercentage =
     ProcessedCount / TotalCount × 100
 ```
 
+TotalCount == 0 時 progressPercentage = 0；沿用 MOD-01 Decimal 與既有公式，不建立新 precision / rounding model。
+
 結果必須限制於：
 
 ```text
@@ -637,7 +639,9 @@ Required Dependencies
 
 使用：
 
-> **Serilog**
+> **Microsoft.Extensions.Logging / ILogger<T> 共用 abstraction**
+
+MOD-01 不安裝或綁定 Serilog provider。Serilog provider 與完整 Monitoring provider integration 留待後續 MOD-09 / composition decision；Application 不引用 Infrastructure。沿用 MOD-01 Logging Ownership / Security，不建立平行 abstraction 或重複 failure events。
 
 重要 Operation 應記錄：
 
@@ -984,6 +988,8 @@ INDEX(
 ---
 
 ## 3.2 Get Batch Status
+
+此 endpoint 由 MOD-01 TASK-11 首次提供；MOD-09 重用 / 擴充同一 endpoint 與 contract，不建立第二套 API。Read-only query 不新增 lifecycle；Processing 狀態更新仍屬 MOD-02。
 
 ```http
 GET /api/v1/images/batches/{batchId}/status
