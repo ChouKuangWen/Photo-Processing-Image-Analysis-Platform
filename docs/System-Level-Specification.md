@@ -1294,6 +1294,26 @@ Batch 仍可以完成，並提供：
 
 ---
 
+### Upload Acceptance / Background Processing Boundary
+
+正式維持流程：Validation → 全部 Storage Save → Begin Database Transaction → Batch / Image Save → ProcessingJob Save → Commit → Queue Enqueue。
+
+Database Commit 成功前，單次 Upload Request 採 Request-level atomic behavior。Validation、Storage Save、Persistence 或 Commit 任一必要步驟失敗，整個 Request 失敗，不接受部分成功的 Batch / Image / ProcessingJob，並須清理本次成功存檔以避免 orphan files。
+
+| 階段 | 必要處理 |
+|---|---|
+| Transaction 尚未建立 | Storage Compensation；No Database Rollback |
+| Transaction 已建立、Commit 尚未成功 | 嘗試 Database Rollback，再逐一嘗試 Storage Compensation |
+| Commit 已成功 | No Rollback；No Storage Compensation，包括 Queue failure 與 Commit 後 cancellation |
+
+Cleanup 為 best-effort：單筆失敗不得阻止其餘 cleanup，不得覆蓋 original exception；必須安全記錄失敗，不假設外部資源失敗時仍可保證刪除成功。Validation 失敗沒有 Storage / Database side effect。
+
+Commit 成功後採 Image-level failure isolation；不得因單張後續 processing failure 撤銷整批已接受資料或不必要地影響其他 Image。
+
+Commit 後 Queue failure 必須保留 DB / Storage、Failure 可觀察、Exception 向上傳遞。MOD-01 不宣稱 automatic requeue、retry scheduler、每個 Pending Job 的 startup recovery 或 durable queue recovery；Recovery 屬後續 Module。
+
+---
+
 # 1.27 Logging & Observability
 
 MVP Logging 分為：
