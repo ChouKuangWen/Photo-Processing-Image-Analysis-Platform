@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using PhotoPlatform.Application.DTOs;
 using PhotoPlatform.Application.Exceptions;
 using PhotoPlatform.Application.Interfaces;
@@ -5,173 +6,243 @@ using PhotoPlatform.Domain.Entities;
 
 namespace PhotoPlatform.Application.Services;
 
-// UploadService 負責安排一次 Upload 的完整流程。
-// 它只透過 Application Interfaces 使用 Validation、Storage、Database 與 Queue，不直接操作 EF Core、SQL Server、Channel 或實體檔案系統。
+// 負責協調完整 Upload 流程。
+// 只使用 Application 定義的介面，不直接操作 EF Core、HTTP、實體檔案系統或 Channel。
 public sealed class UploadService(
     IFileValidationService validation,
     IFileStorageService storage,
     IUploadPersistence persistence,
-    IProcessingQueue queue) : IUploadService
+    IProcessingQueue queue,
+    ILogger<UploadService> logger) : IUploadService
 {
-    // 執行一次完整 Upload。
-    // 回傳 UploadResult 只代表圖片已成功建立並排入背景處理，不代表後續圖片分析工作已經完成。
     public async Task<UploadResult> UploadAsync(UploadRequest request, CancellationToken cancellationToken)
     {
-        // 如果呼叫端已經要求取消，就直接停止後續 Upload 流程。
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // 先檢查整個 Upload Request 是否合理。
-        // 檔案本身的格式、大小、內容等規則，則交給 FileValidationService 處理。
-        ArgumentNullException.ThrowIfNull(request);
-
-        // 先把本次 Upload 的檔案固定成陣列，後續 Validation、Storage 和建立 Image 都使用同一份資料。
-        // 取得 Request 裡的檔案並轉成陣列；如果 Files 是 null，就建立一個空陣列。
-        var files = request.Files?.ToArray() ?? [];
-        if (files.Length == 0)
-            throw new UploadValidationException("INVALID_FILE", "The uploaded file is invalid.");
-        if (!Enum.IsDefined(request.Workflow))
-            throw new UploadValidationException("INVALID_WORKFLOW", "The specified workflow is not supported.");
-
-        // 必須先把所有檔案驗證完成。
-        // 只要有一個檔案不合法，就不應先留下任何實體檔案或 Database 資料。
-        foreach (var file in files)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var result = await validation.ValidateAsync(file, cancellationToken);
-
-            // ErrorCode / ErrorMessage 已由 Validator 決定，
-            // UploadService 只負責把驗證錯誤往上層傳遞。
-            if (!result.IsValid)
-                throw new UploadValidationException(result.ErrorCode!, result.ErrorMessage!);
-        }
-
-        // 記錄已經成功存下來的檔案路徑。
-        // 如果 Commit 前發生錯誤，後面需要靠這份清單把檔案刪除。
+        // 記錄「這次 Upload 已成功存下來的檔案」。
+        // 如果 Commit 前失敗，就只刪除這些檔案。
         var paths = new List<string>();
 
-        // Transaction 要等 Storage 完成後才建立，所以一開始可能還是 null。
+        // Storage 完成後才建立 DB Transaction，所以一開始是 null。
         IUploadTransaction? transaction = null;
 
-        // 用來記錄 Database 是否已經正式 Commit。
-        // Commit 後就不能再用 Rollback 或刪除來源檔案的方式復原。
+        // 記錄資料庫是否已正式 Commit。
+        // false：失敗時需要 Rollback / 刪檔。
+        // true ：資料已正式成立，不能再 Rollback 或刪檔。
         var committed = false;
 
-        // 記錄真正造成 Upload 失敗的主要 Exception。
-        // 如果 finally 裡 Dispose 又失敗，不要讓 Dispose Exception 蓋掉原始錯誤。
+        // 記錄 Upload 原本是否已經發生錯誤。
+        // 用來避免 finally 的 Dispose 錯誤蓋掉真正的 Upload 錯誤。
         Exception? failure = null;
+
+        // 記住本次 Validation Exception。
+        // catch 時可辨識這是不是「使用者輸入驗證錯誤」。
+        UploadValidationException? validationFailure = null;
+
+        // 以下 ID 主要提供安全 Logging 使用。
+        Guid? batchId = null;
+        long? imageId = null;
+        long? jobId = null;
+
+        // 記錄目前執行到哪一個階段。
+        // 如果下一步發生錯誤，就知道錯在哪裡。
+        var stage = UploadFailureStage.RequestValidation;
+
         try
         {
-            // 先把所有來源檔案存進 Storage。
-            // Storage 不屬於 Database Transaction，所以後續若 DB 失敗，
-            // 必須另外呼叫 DeleteAsync 清理已經成功儲存的檔案。
+            // Request 已取消就立即停止。
+            cancellationToken.ThrowIfCancellationRequested();
+            // Request 本身不能是 null。
+            ArgumentNullException.ThrowIfNull(request);
+            // 固定本次 Upload 的檔案清單。
+            var files = request.Files?.ToArray() ?? [];
+            // 至少需要一個檔案。
+            if (files.Length == 0)
+                throw validationFailure = new UploadValidationException("INVALID_FILE", "The uploaded file is invalid.");
+            // Workflow 必須是系統支援的 enum。
+            if (!Enum.IsDefined(request.Workflow))
+                throw validationFailure = new UploadValidationException("INVALID_WORKFLOW", "The specified workflow is not supported.");
+
+            // 1. 驗證所有檔案
+            // 先驗證全部檔案。
+            // 只有全部合法，才進入 Storage，避免留下垃圾檔案。
+            stage = UploadFailureStage.FileValidation;
             foreach (var file in files)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var result = await validation.ValidateAsync(file, cancellationToken);
+                if (!result.IsValid)
+                    throw validationFailure = new UploadValidationException(result.ErrorCode!, result.ErrorMessage!, stage);
+            }
+
+            // 2. 儲存原始圖片
+            // TASK-08 的順序維持不變
+            // 全部 Storage 完成後，才開始 Database Transaction。
+            stage = UploadFailureStage.StorageSave;
+            foreach (var file in files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                // SaveAsync 成功後才把路徑記下來。
+                // 如果後面失敗，就知道要刪哪些檔案。
                 paths.Add(await storage.SaveAsync(file, cancellationToken));
             }
 
+            // 3. 開始 Database Transaction
+            stage = UploadFailureStage.DatabaseBegin;
             cancellationToken.ThrowIfCancellationRequested();
-
-            // 檔案全部存好後才開始 Database Transaction，
-            // 避免檔案 I/O 期間一直占用資料庫交易。
             transaction = await persistence.BeginTransactionAsync(cancellationToken);
 
-            // 一次 Upload 共用同一個 Batch，可以用來管理這一批圖片後續的處理狀態。
+            // 4. 建立 Batch / Image
+            // 這段主要是在記憶體建立 Entity，還沒真正寫入 Database。
+            stage = UploadFailureStage.Unexpected;
             var batch = new Batch(Guid.NewGuid(), files.Length, DateTimeOffset.UtcNow);
-
-            // 每個上傳檔案建立一個 Image Entity。
-            // paths[index] 是前面 Storage 回傳的實際儲存位置。
+            batchId = batch.Id;
             var images = files.Select((file, index) => new Image(batch.Id, file.FileName,
                 paths[index], file.Length, file.MimeType, batch.CreatedAt)).ToArray();
 
-            // Add 只是把 Batch / Images 加入 EF Core Tracking，
-            // 此時還沒有真正 INSERT 到 SQL Server。
+            // 5. 第一階段 Database Save
+            stage = UploadFailureStage.DatabaseSave;
             persistence.AddBatch(batch);
             persistence.AddImages(images);
-
-
-            /*第一次 SaveChanges：
-              1.把 Batch / Images 寫進目前的 Transaction。
-              2.SQL Server 會在這時產生 Image.Id，EF Core 再把正式 Id 回填到原本的 Image 物件。
-              注意：這裡只是 SaveChanges，Transaction 還沒有 Commit。*/
+            // 第一次 SaveChanges 的重要目的：讓 Database 產生 Image Identity，
+            // 並把正式 Image.Id 回填到 Entity。此時還沒有 Commit，所以仍然可以 Rollback。
             await persistence.SaveChangesAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
-            // ProcessingJob 必須知道自己屬於哪一張 Image，
-            // 所以一定要等第一次 SaveChanges 取得正式 Image.Id 後才能建立。
+            // 6. 建立 ProcessingJob
+            // ProcessingJob 需要真正的 Image.Id，所以必須等第一次 SaveChanges 完成後才能建立。
+            stage = UploadFailureStage.Unexpected;
             var jobs = images.Select(image => new ProcessingJob(image.Id, batch.Id,
                 request.Workflow, batch.CreatedAt)).ToArray();
 
-            // 將 Jobs 加入 EF Core Tracking。
+            // 7. 第二階段 Database Save
+            stage = UploadFailureStage.DatabaseSave;
             persistence.AddProcessingJobs(jobs);
-
-            // 第二次 SaveChanges：
-            // 把 ProcessingJobs 寫進和 Batch / Images 相同的 Transaction。
-            // 此時雖然 SQL 已經執行，但整筆 Transaction 仍然可以 Rollback。
             await persistence.SaveChangesAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
-            // 正式 Commit Database Transaction。
-            // 成功後 Batch、Images、ProcessingJobs 才正式成立，其他 DbContext 也能查到。
+            // 8. Commit Database
+            stage = UploadFailureStage.DatabaseCommit;
             await transaction.CommitAsync(cancellationToken);
-
-            // 一定要在 Commit 成功後立刻記錄。後面如果 Queue 或 Cancellation 發生錯誤，就不能再當成「尚未 Commit」處理。
+            // 這是最重要的界線。
+            // Commit 成功後，Batch / Image / Job 已正式成立。
+            // 後面即使 Queue 或 Cancellation 出錯，也不能再 Rollback 或刪除原始圖片。
             committed = true;
 
-             // Database 已 Commit，現在才把 Jobs 放進背景處理 Queue。
+            // 9. 加入 Processing Queue
+            stage = UploadFailureStage.QueueEnqueue;
             foreach (var job in jobs)
             {
+                // 保存目前正在處理的 ID，供 Log 使用。
+                imageId = job.ImageId;
+                jobId = job.Id;
                 cancellationToken.ThrowIfCancellationRequested();
                 await queue.EnqueueAsync(job, cancellationToken);
             }
-            // Upload 已完成建立與入列，
-            // 回傳 Batch 資訊給上一層。
+            // Upload 接受流程完成。
+            // 不代表後續圖片分析已經完成。
             return new UploadResult(batch.Id, batch.TotalCount, batch.Status);
         }
         catch (Exception exception)
         {
+            // 保存原始錯誤。
+            // finally 的 Dispose 如果又失敗，不能把這個錯誤蓋掉。
             failure = exception;
 
-            // 只有 Database 尚未 Commit 時，才做 Rollback 與 Storage Cleanup。
-            // 如果已經 Commit，代表資料已正式成立，不能因為後面的 Queue 失敗又把來源檔案刪除。
+            // 判斷錯誤大分類。
+            // Validation → 使用者輸入問題
+            // Storage    → 儲存檔案失敗
+            // Internal   → DB、Transaction、Queue 等其他系統錯誤
+            var category = ReferenceEquals(exception, validationFailure)
+                ? UploadFailureCategory.Validation
+                : stage == UploadFailureStage.StorageSave
+                    ? UploadFailureCategory.Storage : UploadFailureCategory.Internal;
+            // 安全記錄錯誤。
+            // 不把原始 Exception Message / Stack Trace 直接寫進 Log。
+            LogFailure(stage, exception is OperationCanceledException ? "Canceled" : category.ToString(),
+                batchId, imageId, jobId);
+
+            // Commit 前失敗才需要善後
             if (!committed)
             {
-
-                // 如果 Transaction 已經建立，就嘗試 Rollback。
-                // Cleanup 使用 CancellationToken.None， 因為即使原本 Request 已取消，仍希望盡量完成必要清理。
+                // 如果 Transaction 已經建立，嘗試 Rollback。
+                // 如果 Transaction 還沒建立，就不能假裝執行 Rollback。
                 if (transaction is not null)
                 {
-                    try { await transaction.RollbackAsync(CancellationToken.None); }
+                    try
+                    {   // Cleanup 不使用原 Request token。
+                        // 即使使用者已取消 Request，也要盡量完成 Rollback。
+                        await transaction.RollbackAsync(CancellationToken.None); }
                     catch (Exception)
                     {
-                        // Rollback cleanup 失敗不能蓋掉原本真正的 Upload Exception。
-                        // 繼續嘗試清理 Storage。
+                        // Rollback 自己失敗只記錄，不能蓋掉原本真正造成 Upload 失敗的錯誤。
+                        LogFailure(UploadFailureStage.DatabaseRollback, "Internal", batchId);
                     }
                 }
+                // 刪除本次 Upload 已經成功存下來的檔案。
                 foreach (var path in paths)
                 {
                     try { await storage.DeleteAsync(path, CancellationToken.None); }
                     catch (Exception)
                     {
-                        // 單一檔案刪除失敗時繼續處理其他檔案， 並保留原本真正造成 Upload 失敗的 Exception。
+                        // 一個檔案刪除失敗，還是要繼續刪其他檔案。
+                        // Compensation 錯誤也不能蓋掉原始錯誤。
+                        LogFailure(UploadFailureStage.StorageCompensation, "Storage", batchId, storageKey: path);
                     }
                 }
             }
-            throw;
+
+            // Cancellation 保持原本的 OperationCanceledException。
+            // Validation 也保持 UploadValidationException， 讓 TASK-10 API Layer 可以讀 ErrorCode / ErrorMessage。
+            if (exception is OperationCanceledException || ReferenceEquals(exception, validationFailure))
+                throw;
+
+            // 其他 Storage / DB / Queue 錯誤
+            // 統一包成 UploadFailureException，並記錄當時失敗的 Stage。
+            throw new UploadFailureException(stage, exception);
         }
+
+        // 最後一定要釋放 Transaction
         finally
         {
-            // 不論 Upload 成功或失敗，只要建立過 Transaction，最後都要釋放 Transaction resource。
-            // UploadTransaction.DisposeAsync 只處理 Transaction，不會 Dispose 外部 DI Scope 管理的 DbContext。
             if (transaction is not null)
             {
                 try { await transaction.DisposeAsync(); }
-                catch (Exception) when (failure is not null)
+                catch (Exception exception)
                 {
-                    // 如果 Upload 本來就已經失敗，
-                    // Dispose 的次要錯誤不能取代真正造成 Upload 失敗的 Exception。
+                    // Transaction Dispose 失敗也需要記錄。
+                    LogFailure(UploadFailureStage.TransactionDispose, "Internal", batchId);
+                    // 如果 Upload 原本已經有錯誤，保留原本錯誤，不讓 Dispose 錯誤蓋掉它。
+                    if (failure is null)
+                    {
+                        // 如果 Dispose 本身是取消，保留 Cancellation 原本語意。
+                        if (exception is OperationCanceledException)
+                            throw;
+
+                        // 如果 Upload 本來成功，只有 Dispose 自己失敗，才把 Dispose Failure 往上丟。
+                        throw new UploadFailureException(UploadFailureStage.TransactionDispose, exception);
+                    }
                 }
             }
+        }
+    }
+    // 安全 Failure Logging
+    private void LogFailure(UploadFailureStage stage, string code, Guid? batchId,
+        long? imageId = null, long? jobId = null, string? storageKey = null)
+    {
+        // Storage Log 只允許系統定義的 logical key  original/{32字元 GUID}
+        // 如果收到 OS 路徑或其他奇怪內容，就不寫進 Log。
+        var safeKey = storageKey is { Length: 41 } && storageKey.StartsWith("original/", StringComparison.Ordinal)
+            && Guid.TryParseExact(storageKey.AsSpan(9), "N", out _) ? storageKey : null;
+        try
+        {
+            // 只記錄安全的結構化資訊。
+            // 不傳原始 Exception，避免 Stack Trace、SQL Detail、實體路徑等資訊進入 Log。
+            logger.LogError(new EventId(9001, "UploadFailure"),
+                "Upload failure at {FailureStage}; code {ErrorCode}; batch {BatchId}; image {ImageId}; job {JobId}; storage {StorageKey}",
+                stage, code, batchId, imageId, jobId, safeKey);
+        }
+        catch (Exception)
+        {
+            // Logger 自己如果壞掉，也不能影響 Upload cleanup，更不能把原本真正的 Upload 錯誤蓋掉。
         }
     }
 }

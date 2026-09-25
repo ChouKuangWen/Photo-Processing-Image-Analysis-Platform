@@ -54,6 +54,8 @@ public sealed class UploadServiceTests
         var error = await Assert.ThrowsAsync<UploadValidationException>(() => rig.Service.UploadAsync(request, rig.Token));
         Assert.Equal(code, error.ErrorCode);
         Assert.Equal(error.ErrorMessage, error.Message);
+        Assert.Equal(UploadFailureCategory.Validation, error.Category);
+        Assert.Equal(kind == "file" ? UploadFailureStage.FileValidation : UploadFailureStage.RequestValidation, error.Stage);
         Assert.DoesNotContain("store", rig.Events);
         Assert.DoesNotContain("begin", rig.Events);
         Assert.DoesNotContain("queue", rig.Events);
@@ -71,10 +73,12 @@ public sealed class UploadServiceTests
     {
         // 第二次 Storage 才失敗，才能驗證前一個成功檔案需要清理。
         var rig = new Rig { FailAt = stage };
-        var error = await Assert.ThrowsAsync<IOException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
-        Assert.Same(rig.Primary, error);
+        var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Same(rig.Primary, error.InnerException);
         Assert.Equal(rollback, rig.Events.Contains("rollback"));
         Assert.Equal(stage == "store" ? 1 : 2, rig.Deleted.Count);
+        Assert.Equal(stage == "store" ? UploadFailureCategory.Storage : UploadFailureCategory.Internal, error.Category);
+        Assert.Equal(stage switch { "store" => UploadFailureStage.StorageSave, "begin" => UploadFailureStage.DatabaseBegin, "commit" => UploadFailureStage.DatabaseCommit, _ => UploadFailureStage.DatabaseSave }, error.Stage);
         Assert.DoesNotContain("queue", rig.Events);
     }
 
@@ -84,8 +88,8 @@ public sealed class UploadServiceTests
     public async Task CleanupFailures_DoNotMaskPrimaryOrPreventRemainingDeletes()
     {
         var rig = new Rig { FailAt = "save2", CleanupFails = true };
-        var error = await Assert.ThrowsAsync<IOException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
-        Assert.Same(rig.Primary, error);
+        var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Same(rig.Primary, error.InnerException);
         Assert.Equal(2, rig.Deleted.Count);
         Assert.Contains("dispose", rig.Events);
     }
@@ -96,8 +100,8 @@ public sealed class UploadServiceTests
     public async Task QueueFailure_AfterPartialEnqueuePreservesCommittedDataAndFiles()
     {
         var rig = new Rig { FailAt = "queue" };
-        var error = await Assert.ThrowsAsync<IOException>(() => rig.Service.UploadAsync(Request(3), rig.Token));
-        Assert.Same(rig.Primary, error);
+        var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(3), rig.Token));
+        Assert.Same(rig.Primary, error.InnerException);
         Assert.Equal(2, rig.Events.Count(x => x == "queue"));
         Assert.Contains("commit", rig.Events);
         Assert.DoesNotContain("rollback", rig.Events);
@@ -126,6 +130,150 @@ public sealed class UploadServiceTests
         if (stage == "before") Assert.Empty(rig.Events);
     }
 
+    // 驗證 Commit 邊界：
+    // 第一個 Storage 失敗時尚未建立 Transaction；
+    [Theory]
+    [InlineData("store", UploadFailureStage.StorageSave, UploadFailureCategory.Storage)]
+    [InlineData("queue", UploadFailureStage.QueueEnqueue, UploadFailureCategory.Internal)]
+    public async Task FirstOperationFailure_RespectsTransactionBoundary(string operation,
+        UploadFailureStage stage, UploadFailureCategory category)
+    {
+        // 第一個 Save 尚無成功路徑；第一個 Enqueue 則已 Commit，兩者都不能 Rollback / Delete。
+        var rig = new Rig { FailAt = operation, FailureOccurrence = 1 };
+        var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Same(rig.Primary, error.InnerException);
+        Assert.Equal(stage, error.Stage);
+        Assert.Equal(category, error.Category);
+        Assert.DoesNotContain("rollback", rig.Events);
+        Assert.Empty(rig.Deleted);
+        Assert.Equal(operation == "queue", rig.Events.Contains("commit"));
+        Assert.Single(rig.Logger.Entries);
+    }
+
+    // 錯誤分類依「發生的操作階段」判定，不可信任 dependency 丟出的 Exception 型別。
+    [Fact]
+    public async Task StorageFailure_DoesNotTrustExceptionTypeFromDependency()
+    {
+        // 即使 dependency 拋出 Validation exception，來源仍是 Storage 操作，不能誤回報檔案驗證失敗。
+        var rig = new Rig { FailAt = "store", Primary = new UploadValidationException("INVALID_FILE", "Untrusted") };
+        var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Equal(UploadFailureCategory.Storage, error.Category);
+        Assert.Same(rig.Primary, error.InnerException);
+    }
+
+    // Validator 本身發生未預期錯誤時屬於 Internal failure，
+    // 但 Stage 仍是 FileValidation，且不能留下任何 Storage / DB side effect。
+    [Fact]
+    public async Task UnexpectedValidatorFailure_IsInternalAndHasNoSideEffects()
+    {
+        var rig = new Rig { FailAt = "validate" };
+        var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Equal(UploadFailureCategory.Internal, error.Category);
+        Assert.Equal(UploadFailureStage.FileValidation, error.Stage);
+        Assert.Equal(new[] { "validate" }, rig.Events);
+    }
+
+    // 補償刪除其中一個檔案失敗時，仍必須繼續處理下一個檔案。
+    // Compensation failure 只能額外記錄，不得取代原始 Upload failure。
+    [Fact]
+    public async Task PartialCompensationFailure_StillDeletesNextFileAndLogsOnlyOncePerFailure()
+    {
+        var rig = new Rig { FailAt = "save2", FailDeleteAt = 1 };
+        var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Same(rig.Primary, error.InnerException);
+        Assert.Equal(2, rig.Deleted.Count);
+        Assert.Equal(new[] { UploadFailureStage.DatabaseSave, UploadFailureStage.StorageCompensation },
+            rig.Logger.Entries.Select(x => Assert.IsType<UploadFailureStage>(x.Fields["FailureStage"])));
+        Assert.Equal(rig.Deleted[0], rig.Logger.Entries[1].Fields["StorageKey"]);
+    }
+
+    // 驗證 Upload failure 使用安全的 structured logging：
+    // 不傳入原始 Exception、不記錄敏感資訊，並只允許合法 logical Storage key 進入 Log。
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Logging_IsStructuredAndNeverExposesExceptionOrPhysicalPath(bool invalidKey)
+    {
+        var rig = new Rig { FailAt = "save2", CleanupFails = true,
+            StoredPathOverride = invalidKey ? @"C:\private\secret.jpg" : null };
+        await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Equal(5, rig.Logger.Entries.Count); // primary + rollback + 2 deletes + dispose
+        string[] allowed = ["FailureStage", "ErrorCode", "BatchId", "ImageId", "JobId", "StorageKey", "{OriginalFormat}"];
+        foreach (var entry in rig.Logger.Entries)
+        {
+            Assert.Null(entry.Exception);
+            Assert.All(entry.Fields.Keys, key => Assert.Contains(key, allowed));
+            Assert.DoesNotContain("SQL Detail", entry.Message);
+            Assert.DoesNotContain("Stack Trace", entry.Message);
+            Assert.DoesNotContain("secret", entry.Message);
+            Assert.DoesNotContain("JWT", entry.Message);
+            Assert.DoesNotContain("Authorization", entry.Message);
+            Assert.DoesNotContain(@"C:\", entry.Message);
+            Assert.Equal(rig.Batch!.Id, entry.Fields["BatchId"]);
+            if (invalidKey) Assert.Null(entry.Fields["StorageKey"]);
+        }
+    }
+
+    // Queue 失敗時 Log 必須包含失敗 Job / Image ID。
+    // 若後續 Transaction Dispose 也失敗，不得覆蓋原本的 Queue failure；
+    // Commit 後亦不得 Rollback 或刪除 Storage。
+    [Fact]
+    public async Task QueueFailure_LogIdentifiesFailedJobAndPreservesPrimaryDuringDisposeFailure()
+    {
+        var rig = new Rig { FailAt = "queue", DisposeFails = true };
+        var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(3), rig.Token));
+        Assert.Same(rig.Primary, error.InnerException);
+        Assert.Equal(UploadFailureStage.QueueEnqueue, error.Stage);
+        var entry = rig.Logger.Entries[0];
+        Assert.Equal(rig.Jobs[1].Id, entry.Fields["JobId"]);
+        Assert.Equal(rig.Jobs[1].ImageId, entry.Fields["ImageId"]);
+        Assert.Empty(rig.Deleted);
+        Assert.DoesNotContain("rollback", rig.Events);
+    }
+
+    // 驗證 Commit 成功後立即取消的情況：
+    // 保留原始 CancellationToken，不執行 Queue、Rollback 或 Storage Compensation。
+    // Commit 一旦成功，就不能再逆轉已接受的資料。
+    [Fact]
+    public async Task CancellationImmediatelyAfterSuccessfulCommit_DoesNotEnqueueOrCompensate()
+    {
+        var rig = new Rig { CancelAfterCommit = true };
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Equal(rig.Token, error.CancellationToken);
+        Assert.Contains("commit", rig.Events);
+        Assert.DoesNotContain("queue", rig.Events);
+        Assert.DoesNotContain("rollback", rig.Events);
+        Assert.Empty(rig.Deleted);
+        Assert.Equal("Canceled", Assert.Single(rig.Logger.Entries).Fields["ErrorCode"]);
+    }
+
+    // Upload 已成功且 Commit 完成後，如果只有 Transaction Dispose 失敗，
+    // 應分類為 Internal / TransactionDispose，且不得執行 Rollback 或 Compensation。
+    [Fact]
+    public async Task DisposeFailureAfterSuccess_IsClassifiedWithoutCompensation()
+    {
+        var rig = new Rig { DisposeFails = true };
+        var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(1), rig.Token));
+        Assert.Equal(UploadFailureCategory.Internal, error.Category);
+        Assert.Equal(UploadFailureStage.TransactionDispose, error.Stage);
+        Assert.IsType<IOException>(error.InnerException);
+        Assert.DoesNotContain("rollback", rig.Events);
+        Assert.Empty(rig.Deleted);
+    }
+
+    // Logger 本身失敗時，不得中斷 Rollback / Storage Compensation，
+    // 也不得覆蓋真正造成 Upload 失敗的原始 Exception。
+    [Fact]
+    public async Task LoggingFailure_CannotPreventCleanupOrMaskOriginal()
+    {
+        var rig = new Rig { FailAt = "save2", FailDeleteAt = 1 };
+        rig.Logger.ThrowOnLog = true;
+        var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Same(rig.Primary, error.InnerException);
+        Assert.Equal(2, rig.Deleted.Count);
+        Assert.Contains("rollback", rig.Events);
+    }
+
     // 建立測試用 UploadRequest。
     // 如果 UploadService 自己直接讀取 Stream，就讓測試失敗，確保 Stream 由 Validation / Storage 負責。
     private static UploadRequest Request(int count) => new(Enumerable.Range(0, count)
@@ -145,7 +293,7 @@ public sealed class UploadServiceTests
         public CancellationToken Token => Cancellation.Token;
 
         // 測試中共用的主要 Exception，用來確認原始錯誤不會被 Cleanup Exception 蓋掉。
-        public readonly IOException Primary = new("Simulated dependency failure.");
+        public Exception Primary = new IOException("SQL Detail; Stack Trace; C:\\private\\secret.jpg; JWT secret; Authorization Header");
 
         // 指定哪個階段要模擬 Exception。
         public string? FailAt;
@@ -157,6 +305,11 @@ public sealed class UploadServiceTests
         // 控制 Rollback / Delete / Dispose 是否故意失敗。
         public bool CleanupFails;
         public int StoredCount;
+        public int FailureOccurrence = 2;
+        public bool CancelAfterCommit;
+        public int? FailDeleteAt;
+        public bool DisposeFails;
+        public string? StoredPathOverride;
 
         // 保存 UploadService 建立的 Entity，供測試檢查資料關聯。
         public Batch? Batch;
@@ -165,7 +318,8 @@ public sealed class UploadServiceTests
         private int saves;
 
         // Rig 自己同時實作 UploadService 所需的四個依賴。
-        public UploadService Service => new(this, this, this, this);
+        public readonly RecordingLogger<UploadService> Logger = new();
+        public UploadService Service => new(this, this, this, this, Logger);
 
         // 記錄目前執行階段，並依測試設定模擬 Cancellation 或 Exception。
         // Storage / Queue 在第二次呼叫才觸發，方便測試「部分成功後失敗」的情境。
@@ -173,7 +327,7 @@ public sealed class UploadServiceTests
         {
             Assert.Equal(Token, token);
             Events.Add(stage);
-            var eligible = stage is not ("store" or "queue") || Events.Count(x => x == stage) == 2;
+            var eligible = stage is not ("store" or "queue") || Events.Count(x => x == stage) == FailureOccurrence;
             if (CancelAt == stage && eligible) { Cancellation.Cancel(); token.ThrowIfCancellationRequested(); }
             if (FailAt == stage && eligible) throw Primary;
         }
@@ -185,14 +339,15 @@ public sealed class UploadServiceTests
         public Task<string> SaveAsync(IUploadFile file, CancellationToken token)
         {
             Step("store", token);
-            return Task.FromResult($"original/{++StoredCount}");
+            StoredCount++;
+            return Task.FromResult(StoredPathOverride ?? $"original/{Guid.NewGuid():N}");
         }
         public Task DeleteAsync(string path, CancellationToken token)
         {
             // Cleanup 不使用原本 Request Token，避免 Request 已取消後連 Cleanup 也被取消。
             Assert.Equal(CancellationToken.None, token);
             Deleted.Add(path);
-            if (CleanupFails) throw new IOException("Cleanup failed.");
+            if (CleanupFails || Deleted.Count == FailDeleteAt) throw new IOException("SQL Detail; C:\\private\\secret.jpg");
             return Task.CompletedTask;
         }
         public Task<IUploadTransaction> BeginTransactionAsync(CancellationToken token)
@@ -211,7 +366,7 @@ public sealed class UploadServiceTests
                 for (var i = 0; i < Jobs.Count; i++) typeof(ProcessingJob).GetProperty(nameof(ProcessingJob.Id))!.SetValue(Jobs[i], (long)i + 20);
             return Task.CompletedTask;
         }
-        public Task CommitAsync(CancellationToken token) { Step("commit", token); return Task.CompletedTask; }
+        public Task CommitAsync(CancellationToken token) { Step("commit", token); if (CancelAfterCommit) Cancellation.Cancel(); return Task.CompletedTask; }
 
         // Rollback cleanup 使用獨立 Token，不受原本 Request Cancellation 影響。
         public Task RollbackAsync(CancellationToken token)
@@ -224,7 +379,7 @@ public sealed class UploadServiceTests
         public ValueTask DisposeAsync()
         {
             Events.Add("dispose");
-            if (CleanupFails) throw new IOException("Dispose failed.");
+            if (CleanupFails || DisposeFails) throw new IOException("Dispose failed.");
             return ValueTask.CompletedTask;
         }
         public Task EnqueueAsync(ProcessingJob job, CancellationToken token)

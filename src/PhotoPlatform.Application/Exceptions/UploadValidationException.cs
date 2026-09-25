@@ -1,10 +1,11 @@
 namespace PhotoPlatform.Application.Exceptions;
-
-// Application 的驗證例外，由 UploadService 將已判定的錯誤往上層傳遞；本類別不執行 Validation。
-// 判斷來自 FileValidationService 或 UploadService 的 request-level checks。
-// 保留 ErrorCode / ErrorMessage，供未來 API Layer 決定 HTTP Status 與 Response mapping；此處不處理 HTTP。
-public sealed class UploadValidationException(string errorCode, string errorMessage) : Exception(errorMessage)
+// 表示 Upload 驗證失敗，保存錯誤代碼、訊息與失敗階段。
+// 驗證由其他服務執行，本類別只負責將錯誤資訊傳給上層。
+public sealed class UploadValidationException(string errorCode, string errorMessage,
+    UploadFailureStage stage = UploadFailureStage.RequestValidation) : Exception(errorMessage)
 {
+    public UploadFailureCategory Category => UploadFailureCategory.Validation;
+    public UploadFailureStage Stage { get; } = stage;
     public string ErrorCode { get; } = errorCode;
     public string ErrorMessage { get; } = errorMessage;
 }
