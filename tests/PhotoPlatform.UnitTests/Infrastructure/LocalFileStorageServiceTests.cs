@@ -131,7 +131,11 @@ public sealed class LocalFileStorageServiceTests : IDisposable
         };
 
         if (canceled)
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => FixedService().SaveAsync(File(source), cancellation.Token));
+        {
+            var canceledError = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => FixedService().SaveAsync(File(source), cancellation.Token));
+            Assert.Equal(cancellation.Token, canceledError.CancellationToken);
+        }
         else
             Assert.Same(error, await Assert.ThrowsAsync<IOException>(() => FixedService().SaveAsync(File(source), cancellation.Token)));
 
@@ -164,11 +168,17 @@ public sealed class LocalFileStorageServiceTests : IDisposable
         Assert.False(Directory.Exists(root));
     }
 
-    [Fact]
-    // 目的：寫入與位置恢復同時失敗時，呼叫端仍收到最初的寫入例外，且目的檔案已清除。
-    public async Task SaveAsync_RestoreFailureDoesNotMaskOriginalWriteFailure()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    // 驗證寫入失敗或取消與位置恢復同時失敗時，仍保留原始例外；不模擬目的串流 DisposeAsync 失敗。
+    public async Task SaveAsync_RestoreFailureDoesNotMaskOriginalWriteFailure(bool canceled)
     {
-        var error = new IOException("Original failure");
+        using var cancellation = new CancellationTokenSource();
+        if (canceled) cancellation.Cancel();
+        Exception error = canceled
+            ? new OperationCanceledException(cancellation.Token)
+            : new IOException("Original failure");
         using var source = new TestStream([1, 2, 3])
         {
             Position = 1,
@@ -176,7 +186,10 @@ public sealed class LocalFileStorageServiceTests : IDisposable
             FailRestore = true,
             AfterFirstWrite = () => throw error
         };
-        Assert.Same(error, await Assert.ThrowsAsync<IOException>(() => FixedService().SaveAsync(File(source), default)));
+        var actual = await Record.ExceptionAsync(() => FixedService().SaveAsync(File(source), default));
+        Assert.Same(error, actual);
+        if (canceled)
+            Assert.Equal(cancellation.Token, Assert.IsType<OperationCanceledException>(actual).CancellationToken);
         Assert.False(System.IO.File.Exists(Destination));
         Assert.False(source.Disposed);
     }

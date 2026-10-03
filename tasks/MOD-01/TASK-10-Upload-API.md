@@ -3,7 +3,7 @@
 **模組：** MOD-01 Upload Module  
 **任務編號：** TASK-10  
 **任務名稱：** Upload API  
-**文件狀態：** Development Task  
+**文件狀態：** Pending regression verification / manual review（見 §24）
 **前置任務：** TASK-09 Transaction & Compensation  
 **架構：** Clean Architecture  
 **技術：** ASP.NET Core / C# / EF Core / SQL Server  
@@ -258,20 +258,20 @@ Tests
 
 # 19. Acceptance Criteria
 
-- [ ] Upload endpoint 可接收 multipart/form-data。
-- [ ] 支援單檔與多檔。form fields 固定為 files 與 workflow；workflow 為必填字串。缺少、空白或非法值以 400 / INVALID_WORKFLOW 與既定 validation envelope 拒絕，不因 binding failure 落入 enum default value。
-- [ ] Controller 不直接操作 DB / Storage / Queue。
-- [ ] HTTP-specific type 不滲透進 Application Layer。
-- [ ] 正常 Upload 回傳 202 Accepted。
-- [ ] Validation failure 有一致 HTTP mapping。
-- [ ] Unexpected failure 不洩漏 internal detail。
-- [ ] CancellationToken 正確向下傳遞。
-- [ ] 沿用既有 error response contract。
-- [ ] Unit Tests 全部通過。
-- [ ] API Integration Tests 全部通過。
-- [ ] `dotnet build` 成功。
-- [ ] `dotnet test` 成功。
-- [ ] TASK-01～TASK-09 不 regression。
+- [x] Upload endpoint 可接收 multipart/form-data。
+- [x] 支援單檔與多檔。form fields 固定為 files 與 workflow；workflow 為必填字串。缺少、空白或非法值以 400 / INVALID_WORKFLOW 與既定 validation envelope 拒絕，不因 binding failure 落入 enum default value。
+- [x] Controller 不直接操作 DB / Storage / Queue。
+- [x] HTTP-specific type 不滲透進 Application Layer。
+- [x] 正常 Upload 回傳 202 Accepted。
+- [x] Validation failure 有一致 HTTP mapping。
+- [x] Unexpected failure 不洩漏 internal detail。
+- [x] CancellationToken 正確向下傳遞。
+- [x] 沿用既有 error response contract。
+- [x] Unit Tests 全部通過。
+- [ ] API Integration Tests 全部通過。（本次修正後 SQL 初始化受阻，見 §24）
+- [x] `dotnet build` 成功。
+- [ ] `dotnet test` 成功。（見 §24）
+- [ ] TASK-01～TASK-09 不 regression。（本次完整回歸尚未通過，見 §24）
 
 # 20. Definition of Done
 
@@ -317,3 +317,112 @@ TASK-10 Implementation Result
 9. dotnet test Result
 10. Remaining Risks / Notes
 ```
+
+---
+
+# 23. Completion Record — 2026-09-28
+
+> 歷史紀錄：以下完成判定已由 §24 取代。使用者先前的 260/260 結果不代表本次 Storage 修正版本已通過完整回歸。
+
+**結果：** IMPLEMENTATION COMPLETE。使用者已授權更新完成狀態；本次收尾只更新本文件，未修改程式或測試。
+
+## 驗證來源
+
+- 使用者於本機 VS Code PowerShell 執行完整 `dotnet test`：總計 260，成功 260，失敗 0，跳過 0，包含真實 SQL Server 整合測試。此完整通過結果由使用者回報，不是 Agent 本次執行。
+- 使用者回報建置成功，有 6 個警告；未提供該次警告明細，6 個警告的內容與分類列為未確認。先前 Agent 輸出曾出現 NU1900（NuGet 弱點資料來源無法連線），不能據此認定本次 6 個警告全部相同。
+- 既有測試清單為 UnitTests 209、IntegrationTests 51（含 API HTTP 26、smoke 1、SQL integration 24），合計 260；使用者本次提供的是總計結果，未提供逐專案輸出。
+- 使用者確認 SQL Server 登入與測試連線問題已排除。
+- Agent 本次檢查全部 4 個已追蹤變更及 9 個新增未追蹤檔案，並執行 `git diff --check`，無 whitespace error。未新增依賴套件，未變更 Application / Domain / Infrastructure、Schema 或 TASK-09 補償流程。
+
+## Acceptance Criteria 逐項核對
+
+| §19 項目 | 核對依據 |
+|---|---|
+| multipart/form-data endpoint | UploadController 的 POST /api/v1/images/upload 與 UploadHttpRequest.ReadAsync；真實 Kestrel HTTP 測試。 |
+| 單檔、多檔、files / workflow | MultipartUpload_ReturnsAcceptedEnvelope；workflow 缺少、空白、非法、數字及重複值測試；WrongFileField_IsNotAcceptedAsFiles。 |
+| Controller 不操作 DB / Storage / Queue | Controller 只進行 HTTP mapping、呼叫 IUploadService、回傳成功 envelope。 |
+| HTTP type 不滲透 Application | FormUploadFile 位於 API，實作既有 IUploadFile；Application 未修改。 |
+| 成功 202 | ApiSuccessResponse<UploadResult>；HTTP 測試驗證 success、data.batchId、totalCount、status。 |
+| Validation HTTP mapping | 400 / INVALID_FILE、UNSUPPORTED_FORMAT、FILE_TOO_LARGE、INVALID_WORKFLOW；binding error 同一 envelope。 |
+| Internal detail 不外洩 | 受控訊息、category mapping、安全 logging 測試；不輸出 raw exception；EF diagnostics 在 API composition 過濾。 |
+| CancellationToken | Controller token forwarding、ClientDisconnect_CancelsApplicationToken；不新增 cancellation status。 |
+| 共用 error contract | ApiExceptionMiddleware / ApiErrors；success:false、error.code/message/traceId；不使用 ProblemDetails。 |
+| Unit Tests 全部通過 | 使用者於本機執行完整 260/260 測試結果。 |
+| API Integration Tests 全部通過 | 同上，包含真實 HTTP 與 SQL / Storage API 整合案例。 |
+| Build 成功 | 使用者於本機執行並回報；6 個警告明細未確認。 |
+| dotnet test 成功 | 使用者於本機執行：260 passed / 0 failed / 0 skipped。 |
+| TASK-01～TASK-09 無 regression | 沿用全部既有測試、未降低斷言；包含在使用者完整通過結果中。 |
+
+## 其他契約與邊界核對
+
+- StorageSave category → 500 / STORAGE_ERROR；Database / Transaction / Queue / unexpected → 500 / INTERNAL_ERROR，不從 IOException 型別猜來源。
+- BATCH_NOT_FOUND 的共用 404 mapping / envelope 已有單元測試；本 Task 未實作 Batch Status endpoint，TASK-11 未開始。
+- 沿用 request TraceIdentifier，缺少時建立；error.traceId 與 HTTP logging 使用相同值。
+- UploadService、DbContext、UploadPersistence 為 Scoped；Queue、無 request state 的 Storage / Validation 為 Singleton。Composition_IsolatesPersistenceAndSharesQueue 驗證 isolation / queue lifetime。
+- HTTP adapter 可重複從檔案開頭讀取，並釋放自己開啟的 stream；底層 request body 由 ASP.NET Core 管理。Controller 不將 request stream 交給 Worker。
+- SQL integration 新增成功接受及 Commit 後 Queue failure 案例，驗證 DB / Storage 保留；未改補償語意。
+
+## 變更檔案
+
+新增：
+
+- src/PhotoPlatform.Api/Contracts/ApiError.cs
+- src/PhotoPlatform.Api/Controllers/UploadController.cs
+- src/PhotoPlatform.Api/Http/ApiExceptionMiddleware.cs
+- src/PhotoPlatform.Api/Http/FormUploadFile.cs
+- src/PhotoPlatform.Api/Http/UploadHttpRequest.cs
+- src/PhotoPlatform.Api/UploadApiComposition.cs
+- tests/PhotoPlatform.UnitTests/Api/UploadApiTests.cs
+- tests/PhotoPlatform.IntegrationTests/Api/UploadApiHost.cs
+- tests/PhotoPlatform.IntegrationTests/Api/UploadApiTests.cs
+
+修改：
+
+- src/PhotoPlatform.Api/Program.cs
+- tests/PhotoPlatform.UnitTests/PhotoPlatform.UnitTests.csproj（API ProjectReference）
+- tests/PhotoPlatform.IntegrationTests/PhotoPlatform.IntegrationTests.csproj（API ProjectReference）
+- tests/PhotoPlatform.IntegrationTests/Persistence/UploadPersistenceTests.cs（新增 API 整合案例）
+- tasks/MOD-01/TASK-10-Upload-API.md（本次完成狀態與驗收紀錄）
+
+## 剩餘限制
+
+撤回先前「無已知 TASK-10 阻擋或未解規格衝突」的描述；本次 Review 修正、驗證阻擋與待決策事項見 §24。歷史 6 個警告明細仍未確認。Queue 仍為既有 bounded runtime queue，Worker / recovery 不屬本 Task；不宣稱背景處理或整個 MOD-01 已完成。
+
+No commit was created. Waiting for manual code review and commit approval.
+
+# 24. Review 3c 修正與重新驗證 — 2026-09-29
+
+**目前結論：** 3c 程式修正與受影響測試已完成；完整回歸仍受 SQL 登入問題阻擋，尚不能重新宣稱 TASK-10 Completed，待人工 Review。
+
+## 授權與變更
+
+使用者批准將既有 Storage 的 3c 缺陷納入本次範圍。依 MOD-01 §1.10、TASK-05 §15 / §18.10 與 TASK-10 §9，清理失敗不得覆蓋原始失敗或取消，且不為測試新增檔案系統抽象。
+
+- `src/PhotoPlatform.Infrastructure/Storage/LocalFileStorageService.cs`：以明確 try / catch / finally 管理目的串流；在 DisposeAsync 前保存 Copy / Flush 原始例外。已有原始失敗時忽略次要釋放例外並以原始 throw 傳播，包含 cancellation；只有 DisposeAsync 失敗時仍進入外層失敗處理，嘗試恢復來源位置及刪除本次建立的檔案。來源仍由呼叫端擁有，CreateNew 失敗不刪既有檔案；刪除仍為 best effort。
+- `tests/PhotoPlatform.UnitTests/Infrastructure/LocalFileStorageServiceTests.cs`：加強取消 token 斷言；將原始失敗與來源位置恢復同時失敗的案例擴充至 cancellation，驗證同一例外、token、檔案清理與來源未被釋放。
+- 本文件：更新目前狀態、撤回過時完成結論並保留歷史驗證來源。
+
+## 本次 Agent 實際執行結果
+
+| 驗證 | 結果 |
+|---|---|
+| `dotnet restore PhotoPlatform.sln` | 成功；3 個 NU1900（NuGet 弱點資訊來源無法取得） |
+| `dotnet build PhotoPlatform.sln --no-restore` | 成功；0 error、3 個 NU1900 warning |
+| LocalFileStorageServiceTests 篩選測試 | 41 通過、0 失敗、0 跳過 |
+| 完整回歸：PhotoPlatform.UnitTests | 210 通過、0 失敗、0 跳過 |
+| 完整回歸：PhotoPlatform.IntegrationTests | 27 通過、24 失敗、0 跳過 |
+| 完整回歸合計 | 261 項；237 通過、24 失敗、0 跳過；未通過 |
+
+完整回歸命令：`dotnet test PhotoPlatform.sln --no-build --no-restore --logger 'console;verbosity=quiet'`。最初 SQL 初始化出現網路／執行個體連線失敗；啟動既有 Docker Desktop 與 photoplatform-test-sql 後重跑，仍有上述 24 個失敗。進一步以單一 SQL 案例診斷，確認 InitializeAsync 階段為登入失敗；尚未執行案例斷言，屬目前 Agent 測試環境的登入阻擋，不能據此判定程式回歸失敗或通過。未輸出連線字串或密碼，未變更憑證。先前使用者本機 260/260 與 6 個警告僅保留為歷史結果。
+
+## 驗證限制
+
+實際測試涵蓋寫入失敗／取消及來源位置恢復失敗的例外優先順序，以及既有成功、清理、來源所有權與碰撞保護案例。以下僅完成控制流程核對，**未經確定性執行測試覆蓋**：Copy / Flush 與目的 FileStream.DisposeAsync 同時失敗（含取消），以及只有目的 DisposeAsync 失敗。未新增 IFileSystem、串流 factory 或其他 production 測試抽象。目的釋放失敗時仍會嘗試刪除，但不保證刪除一定成功。
+
+## 延續唯讀 Review 的待決策／改善事項
+
+- **上傳限制：規格未定義部分待決策。** 既定單檔驗證在 Application 解析後執行；Controller 保留 DisableRequestSizeLimit 與 MultipartBodyLengthLimit = long.MaxValue。檔案數量、整體 request 與表單解析期間的完整限制及部署上限仍需決策／確認；本次不新增限制或錯誤契約。
+- **EF Core 日誌政策：待決策。** LogLevel.None 會停用該分類下所有日誌，包含警告與錯誤；既有安全訊息規範不等同明確要求全面停用。Application 階段與 API 分類事件不等於完整 EF 診斷，須決定保留哪些診斷及安全處理方式；本次不改 filter。
+- **API adapter cleanup（3a / 3b）：改善項目與未定義行為。** 任一 Dispose 拋錯會中止迴圈，Controller using 的清理例外可能覆蓋原失敗；標準 FormFile 的 ReferenceReadStream 釋放僅標記已釋放，尚無目前正常 HTTP 路徑可重現的證據。對可拋錯 adapter stream 的清理策略及僅清理失敗的 API 結果仍待決策，本次不修改。
+
+以上事項不因測試通過而視為已決策；3c 修正不代表它們已解決。未修改 API 契約、Schema、TASK-09 補償流程、AGENTS.md；未開始 TASK-11，未建立 commit。

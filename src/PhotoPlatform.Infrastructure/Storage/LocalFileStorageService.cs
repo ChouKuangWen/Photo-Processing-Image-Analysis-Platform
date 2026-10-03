@@ -64,17 +64,32 @@ public sealed class LocalFileStorageService : IFileStorageService
             // CreateNew 避免先檢查再建立的競爭條件，保護既有內容不被覆寫。
             // 規格要求衝突直接失敗，不以 Retry 或重新命名隱藏此次衝突。
             // destination 是寫入檔案的 FileStream 物件，destinationPath 是它開啟的路徑。
-            // 目的串流由本服務建立，所以用 await using 在成功或失敗離開區塊時釋放它。
+            // 明確管理釋放順序，先保存 Copy / Flush 失敗，避免 DisposeAsync 覆蓋原始例外。
             // FileShare.None 限制開啟期間的其他存取；81920 是緩衝區大小，不是檔案大小上限。
-            await using (var destination = new FileStream(destinationPath, FileMode.CreateNew,
-                FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
+            var destination = new FileStream(destinationPath, FileMode.CreateNew,
+                FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous);
+            created = true;
+            try
             {
-                created = true;
                 // 分批從來源讀取 bytes 並寫入目的檔案，不需要把整份內容一次放進記憶體。
                 // await 等待複製完成才往下執行；Token 讓非同步 I/O 能回應取消要求。
                 await source.CopyToAsync(destination, cancellationToken);
                 // 把目的串流尚未寫出的緩衝資料寫出；這不是關閉檔案，也不保證斷電後資料一定留存。
                 await destination.FlushAsync(cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+                throw;
+            }
+            finally
+            {
+                try { await destination.DisposeAsync(); }
+                catch (Exception) when (failure is not null)
+                {
+                    // 如果前面已經失敗，DisposeAsync 的例外不能蓋掉原始失敗。
+                    // 如果只有 DisposeAsync 失敗，則讓它正常往外拋。
+                }
             }
         }
         catch (Exception exception)
@@ -86,7 +101,7 @@ public sealed class LocalFileStorageService : IFileStorageService
         }
         finally
         {
-            // 寫入成功或拋出例外，都要嘗試還原借用的來源位置；目的串流此時已離開 await using。
+            // 寫入成功或拋出例外，都要嘗試還原借用的來源位置；此時已嘗試釋放目的串流。
             try
             {
                 if (originalPosition.HasValue)

@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+    <!-- TASK-10 測試重用 API 型別與組合根；只增加專案參考，不新增 NuGet 套件。 -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -18,6 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/PhotoPlatform.Infrastructure/PhotoPlatform.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/PhotoPlatform.Api/PhotoPlatform.Api.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
+using System.Net;
+using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using PhotoPlatform.Application.DTOs;
@@ -58,6 +61,75 @@ public sealed class UploadPersistenceTests : IAsyncLifetime
         if (Directory.Exists(target)) Directory.Delete(target, true);
     }
     private PhotoPlatformDbContext CreateContext() => new(_options ?? throw new InvalidOperationException("Database has not been initialized."));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    // 使用真實 HTTP、SQL 與 Storage 跑完整 Upload 流程。
+    // 驗證 DB 已 Commit 後，即使 Queue enqueue 失敗，也不能撤銷已提交資料或刪除已保存檔案。
+
+    public async Task UploadApi_RealSqlAndStorage_PreserveAcceptanceBoundary(bool queueFails)
+    {
+        // 建立測試 API 所需設定，使用目前 Integration Test 的 SQL 與暫存 Storage。
+        var settings = new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:PhotoPlatform"] = CreateConnectionString(),
+            ["Upload:StorageRoot"] = _storageRoot,
+            ["Upload:MaxFileSizeBytes"] = "1024"
+        };
+        // 啟動完整 Upload API。
+        // queueFails = true 時，才將 IProcessingQueue 換成故意失敗的測試實作；
+        // 其餘 UploadService、SQL、Storage 流程皆使用正式實作。
+        await using var host = await Api.UploadApiHost.StartAsync(services =>
+        {
+            if (queueFails)
+                // 模擬 Commit 完成後，Queue.EnqueueAsync() 發生失敗。
+                services.AddSingleton<IProcessingQueue>(
+                    new UploadDependencies((_, _) => throw new IOException("secret SQL detail")));
+        }, settings);
+
+        // 建立正常的 multipart/form-data：2 個 JPEG，workflow = Full。
+        using var body = Api.UploadApiTests.Multipart(2, "Full");
+
+        // 透過真實 HTTP 呼叫 Upload API。
+        using var response = await host.Client.PostAsync("/api/v1/images/upload", body);
+
+        // Queue 正常時應回 202；
+        // Queue 失敗時應回 500。
+        Assert.Equal(queueFails ? HttpStatusCode.InternalServerError : HttpStatusCode.Accepted,
+            response.StatusCode);
+        var text = await response.Content.ReadAsStringAsync();
+
+        // 原始例外中的敏感資訊不得出現在 HTTP Response。
+        Assert.DoesNotContain("secret", text);
+        using var json = JsonDocument.Parse(text);
+
+        // Queue 失敗時，對外應統一回 INTERNAL_ERROR，並包含 TraceId。
+        if (queueFails)
+        {
+            var error = json.RootElement.GetProperty("error");
+            Assert.Equal("INTERNAL_ERROR", error.GetProperty("code").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(error.GetProperty("traceId").GetString()));
+        }
+        // 使用新的 DbContext 重新查詢 SQL，確認資料是真的已 Commit，而不是只存在原本 DbContext 的追蹤狀態中。
+        // 即使 Queue 失敗、API 回 500，已提交的 Batch、Image、ProcessingJob 仍必須存在。
+        await using var verification = CreateContext();
+        Assert.Equal(1, await verification.Batches.CountAsync());
+        Assert.Equal(2, await verification.Images.CountAsync());
+        Assert.Equal(2, await verification.ProcessingJobs.CountAsync());
+
+        // 再確認 Storage 中的原始檔案仍然存在，證明 Commit 後的 Queue 失敗沒有觸發錯誤補償刪檔。
+        foreach (var image in await verification.Images.ToListAsync())
+            Assert.Equal(new byte[] { 0xff, 0xd8, 0xff }, await File.ReadAllBytesAsync(
+                Path.Combine(_storageRoot, image.StoredPath.Replace('/', Path.DirectorySeparatorChar))));
+    }
+
+    // 取得目前 Integration Test 使用的 SQL Connection String，提供給 UploadApiHost 使用。
+    private string CreateConnectionString()
+    {
+        using var db = CreateContext();
+        return db.Database.GetConnectionString()!;
+    }
     private static Image NewImage(Guid batchId) => new(batchId, "旅行照片.jpg", "original/550e8400e29b41d4a716446655440000", 1024, "image/jpeg", CreatedAt);
 
     [Fact]
