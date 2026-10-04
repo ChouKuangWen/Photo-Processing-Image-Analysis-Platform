@@ -818,6 +818,12 @@ EF Core InMemory Provider
 
 來宣稱 SQL Server Integration 已驗證。
 
+### SQL Server Test Environment Routing
+
+遇到 SQL Server Integration Test 環境問題（例如 `Login failed for user 'sa'`、SQL connection failure、`PHOTO_PLATFORM_TEST_DB_CONNECTION_STRING` missing / invalid、Docker SQL Server unavailable、database creation permission failure，或多個測試共用 DB initialization failure），優先使用 `.codex/skills/sqlserver-integration-test/SKILL.md`。
+
+先確認第一個真正失敗、Test 實際設定來源與 Direct SQL Connection；在該 Skill 尚未確認 SQL Test Environment 正常前，不得因上述 Environment Failure 直接修改 Production Code。Authentication failure 可依 Skill 非破壞性診斷與安全恢復；超出其 Secret、環境政策或破壞性操作邊界時停止並等待明確批准，不修改測試語意或 Schema 來繞過。
+
 ---
 
 # 25. E2E Test
