@@ -3,7 +3,7 @@
 **模組：** MOD-01 Upload Module  
 **任務編號：** TASK-10  
 **任務名稱：** Upload API  
-**文件狀態：** Pending regression verification / manual review（見 §24）
+**文件狀態：** Implementation Complete（最新驗證見 §25；歷史阻擋見 §24）
 **前置任務：** TASK-09 Transaction & Compensation  
 **架構：** Clean Architecture  
 **技術：** ASP.NET Core / C# / EF Core / SQL Server  
@@ -268,10 +268,10 @@ Tests
 - [x] CancellationToken 正確向下傳遞。
 - [x] 沿用既有 error response contract。
 - [x] Unit Tests 全部通過。
-- [ ] API Integration Tests 全部通過。（本次修正後 SQL 初始化受阻，見 §24）
+- [x] API Integration Tests 全部通過。（使用者回報 51/51，見 §25）
 - [x] `dotnet build` 成功。
-- [ ] `dotnet test` 成功。（見 §24）
-- [ ] TASK-01～TASK-09 不 regression。（本次完整回歸尚未通過，見 §24）
+- [x] `dotnet test` 成功。（使用者回報完整回歸 261/261，見 §25）
+- [x] TASK-01～TASK-09 不 regression。（完整回歸 261/261，見 §25）
 
 # 20. Definition of Done
 
@@ -392,7 +392,7 @@ No commit was created. Waiting for manual code review and commit approval.
 
 # 24. Review 3c 修正與重新驗證 — 2026-09-29
 
-**目前結論：** 3c 程式修正與受影響測試已完成；完整回歸仍受 SQL 登入問題阻擋，尚不能重新宣稱 TASK-10 Completed，待人工 Review。
+**歷史結論（2026-09-29）：** 3c 程式修正與受影響測試已完成；當時完整回歸受 SQL 登入問題阻擋，尚不能重新宣稱 TASK-10 Completed。此驗證阻擋已解除，最新完成判定見 §25；本節保留先前實際結果與驗證限制。
 
 ## 授權與變更
 
@@ -426,3 +426,28 @@ No commit was created. Waiting for manual code review and commit approval.
 - **API adapter cleanup（3a / 3b）：改善項目與未定義行為。** 任一 Dispose 拋錯會中止迴圈，Controller using 的清理例外可能覆蓋原失敗；標準 FormFile 的 ReferenceReadStream 釋放僅標記已釋放，尚無目前正常 HTTP 路徑可重現的證據。對可拋錯 adapter stream 的清理策略及僅清理失敗的 API 結果仍待決策，本次不修改。
 
 以上事項不因測試通過而視為已決策；3c 修正不代表它們已解決。未修改 API 契約、Schema、TASK-09 補償流程、AGENTS.md；未開始 TASK-11，未建立 commit。
+
+# 25. SQL 環境阻擋解除與完成紀錄 — 2026-10-04
+
+**目前結論：TASK-10 IMPLEMENTATION COMPLETE。** 使用者提供修正版本的完整驗證結果並授權更新完成紀錄；§24 的 SQL 登入與完整回歸阻擋已解除。本次只更新文件，不修改 production code 或測試。
+
+## 最新驗證基準與來源
+
+以下為使用者於本機 PowerShell 執行並回報的結果，不是 Agent 本次重新執行：
+
+- HEAD：`f55a279da1f3bdfb8e501706e068557f956b461c`。
+- 驗證時 `git status --porcelain`：clean。
+- `dotnet build`：PASS，0 errors；6 × NU1900，原因為無法取得 `https://api.nuget.org/v3/index.json` 的套件弱點資料，不是 compilation failure。
+- Integration Tests：51/51 PASS，0 failed，0 skipped。
+- Full Regression：261/261 PASS，0 failed，0 skipped；包含 TASK-01～TASK-10 既有測試。
+- 原本 24 個 Integration Test failures 已確認由 `PHOTO_PLATFORM_TEST_DB_CONNECTION_STRING` 中的 sa 密碼與目前 Docker SQL Server 不一致造成。修正 test connection string 後，PowerShell SQL connection 驗證成功，Integration 與 Full Regression 全數通過。此處不記錄密碼或連線字串內容。
+
+§24 的 237 passed / 24 failed 保留為先前環境阻擋紀錄，不代表目前版本仍有測試失敗；§23 的 260/260 保留為更早歷史結果，不作為本次修正版本的完成依據。
+
+## 完成範圍與保留事項
+
+最新完整回歸已滿足 §19 的 API Integration Tests、dotnet test 與 TASK-01～TASK-09 regression 驗證項目。TASK-10 前置驗證阻擋解除，可重新進行 TASK-11 pre-implementation review。
+
+§24 的確定性測試覆蓋限制，以及 EF logging filter、upload limits、adapter cleanup 待決事項仍保留；不因測試通過而視為已解決。本次不處理 NU1900，不變更 API / Database contract、TASK-09 Transaction / Compensation boundary 或既有程式。Queue / Worker / recovery 的既有限制不變。
+
+TASK-11 implementation 尚未開始，仍須 review 通過與使用者明確批准。未建立 commit 或 push。
