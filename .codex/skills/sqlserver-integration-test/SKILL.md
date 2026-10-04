@@ -1,3 +1,8 @@
+---
+name: sqlserver-integration-test
+description: Prepare and verify real SQL Server integration tests; diagnose authentication, connection string, and process environment failures without changing production code or exposing secrets.
+---
+
 # SQL Server Integration Test Skill
 
 ## 1. Purpose
@@ -33,6 +38,7 @@
 - 檢查 Port Mapping
 - 查看 SQL Server 啟動 Logs
 - 使用既有 Environment Variable
+- 依 §17.1～§17.7 非破壞性診斷 Authentication / Connection String，並在條件滿足時修正本機 Test Environment
 - 執行 `dotnet build`
 - 執行指定 Integration Tests
 - 執行完整 Integration Tests
@@ -557,6 +563,133 @@ $env:PHOTO_PLATFORM_TEST_DB_CONNECTION_STRING="Server=localhost,<port>;Database=
 
 ---
 
+## 17.1 Authentication Diagnosis Flow / First Meaningful Exception
+
+`Login failed` 不等於 Production Code Failure。在 SQL Test Environment 尚未驗證前，不得因此修改 Production Code。
+
+```text
+Integration SQL Failure
+→ 第一個真正 Exception（含 inner exception 的安全分類）
+→ 是否集中於 InitializeAsync / Fixture / Test Host / DB initialization / Migration setup
+→ 確認 Test 實際 Connection String source
+→ 確認既有 Docker SQL Server Running / Ready 與 Port Mapping
+→ sqlcmd 獨立驗證候選 Credential
+→ 檢查 Test Environment 的存在、格式與來源
+→ 使用 Test 實際使用的 Connection String 直接 Open SQL Connection
+   FAIL    → 分類環境問題；符合 §17.6 才安全修正
+   SUCCESS → 若 Test 仍 Login Failed，查 child process / inheritance / fixture / override
+→ Direct Connection SUCCESS → Build → Target → Full Integration → Required Regression
+```
+
+大量失敗數量不代表多個 Implementation Failure。共用 setup failure 應先查共同 Environment / Test Infrastructure root cause，不逐一分析重複 stack trace。可先篩選單一失敗案例；需要保存輸出時，可在本機診斷環境使用：
+
+```powershell
+dotnet test tests/PhotoPlatform.IntegrationTests/PhotoPlatform.IntegrationTests.csproj --no-build --logger "console;verbosity=detailed" *> integration-test.txt
+Select-String -Path integration-test.txt -Pattern "Login failed|SqlException|Exception|ConnectionString|database" -Context 3,8 | Select-Object -First 50
+```
+
+以上為本機診斷命令，不能將未檢查的詳細輸出直接回傳 Agent 對話：raw exception、stack、任意 provider / configuration 文字可能含 Secret。Agent 應在命令內擷取後，只輸出受控分類、SQL error number、失敗方法名稱與結果，不輸出 raw message / connection string。診斷檔為敏感本機產物，不得加入 Git；已有同名檔時不覆寫，改用本機暫存路徑。完成後檢查 git status，若 tracked 或 staged，停止並回報，不自動 commit、stage、刪除或撤銷使用者檔案。
+
+## 17.2 Connection String Source Verification
+
+先唯讀檢查目標 Test / Fixture / Host 實際如何取得設定。若使用 `Environment.GetEnvironmentVariable("PHOTO_PLATFORM_TEST_DB_CONNECTION_STRING")`，以 Test process 的該來源為準，並核對 fixture 是否改寫 InitialCatalog、Host 是否套用 configuration override。Docker inspect、appsettings 或 User Environment 的存在不能證明 Test 使用它們。
+
+來源無法確定時 STOP → Report exact ambiguity，不猜測。Direct check 應使用與 Test 相同來源、有效設定與 provider；只連線核對，不建立或刪除 Database。後續隔離 Database 的建立與清理由既有 Test 負責。
+
+## 17.3 Independent sqlcmd Credential Verification
+
+Password 由使用者在自己的本機 Terminal 處理，不貼到 Chat、不進入 Agent tool argument、report 或 tracked file。優先省略 `-P`，由 sqlcmd 隱藏提示輸入密碼，避免明文命令列與 shell history：
+
+```powershell
+docker exec -it <container-name> /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C
+```
+
+登入後執行 `SELECT @@VERSION;` 與 `GO`，作為 authentication 成功證據；若工具路徑不存在，唯讀確認既有工具位置，不為診斷新增套件。`-C` 僅用於既有本機測試環境，不變更長期 Encrypt / certificate policy。
+
+Docker 設定中的 Credential 只是候選來源；既有 volume 的實際 SQL 密碼可能不同。以實際 authentication 成功為準，不讀出 Container Environment、不 reset 密碼。sqlcmd 失敗只能判定候選 credential 未通過，不能據此斷言 SQL Server 密碼損壞。此檢查在 container 內，不證明 host port / Test connection 正常。
+
+## 17.4 Direct Test Connection / Process and User Environment
+
+`sqlcmd SUCCESS` 不代表 `PHOTO_PLATFORM_TEST_DB_CONNECTION_STRING SUCCESS`，必須分開驗證。在將執行 dotnet test 的同一 process environment 檢查，不輸出值：
+
+```powershell
+$processConnection = [Environment]::GetEnvironmentVariable('PHOTO_PLATFORM_TEST_DB_CONNECTION_STRING', 'Process')
+$userConnection = [Environment]::GetEnvironmentVariable('PHOTO_PLATFORM_TEST_DB_CONNECTION_STRING', 'User')
+"Process connection string: $(if ([string]::IsNullOrWhiteSpace($processConnection)) { 'MISSING' } else { 'PRESENT' })"
+"User connection string: $(if ([string]::IsNullOrWhiteSpace($userConnection)) { 'MISSING' } else { 'PRESENT' })"
+"Process == User: $($processConnection -eq $userConnection)"
+```
+
+True 只表示字串相同（兩者缺少也可能 True），不代表 Credential、SQL Login 或測試環境正常。不得為了相同而自動將 User 值複製到 Process。User 值更新不會回填已啟動的 VS Code / Agent / Terminal；須核對 dotnet test child process 的繼承環境。不要假定兩次 Agent shell 呼叫共享前一次 `$env:` 修改。
+
+PowerShell 可做以下基礎檢查；catch 不印 raw Exception.Message，constructor 也在 try 內，避免格式錯誤外洩：
+
+```powershell
+Add-Type -AssemblyName System.Data
+$testConnection = $null
+try {
+    if ([string]::IsNullOrWhiteSpace($processConnection)) { throw [InvalidOperationException]::new() }
+    $testConnection = [System.Data.SqlClient.SqlConnection]::new($processConnection)
+    $testConnection.Open()
+    'SQL CONNECTION SUCCESS'
+}
+catch { 'SQL CONNECTION FAILED' }
+finally { if ($null -ne $testConnection) { $testConnection.Dispose() } }
+```
+
+本專案 Test 使用 Microsoft.Data.SqlClient；System.Data.SqlClient 檢查僅為基礎證據。當 provider / Encrypt / keyword 相容性可能影響結果時，使用既有 build output 中 Test 相同的 Microsoft.Data.SqlClient，在本機記憶體執行同樣 Open / Dispose，不新增依賴或檔案、不改設定來適應舊 provider。需要細分類時只輸出受控分類與 error number，不輸出例外內容。
+
+| sqlcmd | Direct Test Connection | 判斷 / 下一步 |
+|---|---|---|
+| FAIL | 未確認 | 查候選 Credential、engine readiness；不得 reset / recreate |
+| PASS | FAIL | 查实际 host port、Credential mismatch、格式、Encrypt policy、process source；不是 production regression 證據 |
+| PASS | PASS，但 Test login fail | 停止改 Password；查 dotnet test child process、inheritance、fixture、Host / test-specific override |
+| PASS | PASS，setup 成功但功能斷言失敗 | 依 §24 分類，才考慮 Implementation Failure |
+
+## 17.5 ConnectionString Wrapper / Format Diagnosis
+
+`ConnectionString=ConnectionString=...` 是可能的外層包裝，可能造成 unsupported keyword。只在記憶體以 generic builder 檢查，最多 10 層，不輸出 `$temp` 或 value、不自動採用拆解結果：
+
+```powershell
+$temp = $processConnection
+for ($layer = 1; $layer -le 10; $layer++) {
+    try {
+        $builder = [System.Data.Common.DbConnectionStringBuilder]::new()
+        $builder.ConnectionString = $temp
+        # 只輸出固定白名單 key；任意 malformed key 也可能含 Secret。
+        $knownKeys = @($builder.Keys | Where-Object { $_ -in @('ConnectionString', 'Server', 'Data Source', 'Database', 'Initial Catalog', 'User Id', 'UID', 'Password', 'PWD', 'Encrypt', 'TrustServerCertificate', 'Integrated Security') })
+        "Layer $layer known keys: $($knownKeys -join ', ')"
+        "Unknown keys present: $(@($builder.Keys).Count -gt $knownKeys.Count)"
+        if ($builder.Count -eq 1 -and $builder.ContainsKey('ConnectionString')) {
+            $temp = [string]$builder['ConnectionString']
+        } else { break }
+    }
+    catch { 'CONNECTION STRING FORMAT FAILURE'; break }
+}
+```
+
+單一 ConnectionString key 提示包裝；與其他 key 混合、parse failure 或到第 10 層仍有包裝，均需停止拆解、分類 Connection String Format Failure。正常 SQL keys 不代表 Credential 正確，仍需 direct connection。
+
+## 17.6 Safe Environment Recovery
+
+僅當全部成立才允許修正本機 Test Connection String：Docker Running / Ready；候選 Credential 已由 sqlcmd 實際登入；Test 實際 connection direct check 失敗；已確認 Credential / format mismatch；不修改 Production / Test code、Schema / Migration；不 reset sa、不刪 Database / volume、不 recreate / stop / remove container，不改未核准環境政策。
+
+由使用者在自己的本機 Terminal 用 `Read-Host -AsSecureString` 輸入已驗證密碼。以 SQL provider 的 SqlConnectionStringBuilder 在記憶體建立乾淨字串，避免特殊字元造成格式錯誤；使用實際 Docker host port、localhost、master、sa、TrustServerCertificate=True，Encrypt 沿用既有核准設定。需暫時轉為明文時只保存在本機記憶體，finally 釋放 SecureString / unmanaged buffer，不 echo 或記錄。
+
+只更新執行測試所需的 Process environment；User environment 僅在既有專案做法與使用者授權允許持久化時更新，並核對後續 process inheritance。不寫入 Repository、appsettings、.env、script 或連線檔。不執行本機 credential recovery 時，不要求使用者提供 Secret。
+
+超出上述邊界時 STOP，說明需批准的具體 action：reset sa password、recreate container、delete volume、destructive database operation、Production / Schema / Migration 修改或未核准政策變更；本 Skill 不自行执行這些動作。
+
+## 17.7 Recovery Verification / Known Incident
+
+恢復後先 Direct SQL Connection SUCCESS；依 §18 build，再 Target Integration、Full Integration、Task 要求的 Full Regression，最後 `git diff --check`、`git status --porcelain`、`git rev-parse HEAD`。`--no-build` 僅在相同來源與組態已有成功 build 時使用。Direct 成功不證明有建立 Database 權限；由 Target setup 驗證。任一階段未通過不得跳到完整回歸或宣稱完成。
+
+報告記錄 Total / Passed / Failed / Skipped、build errors / warnings、HEAD、working tree、direct connection 結果與診斷產物狀態，區分使用者回報與 Agent 實際執行。
+
+已知案例（使用者回報）：Full Regression 261 total / 237 passed / 24 failed；Integration 51 total / 27 passed / 24 failed。共同 `Login failed for user 'sa'` 集中於 `UploadPersistenceTests.InitializeAsync()`，來源為 `PHOTO_PLATFORM_TEST_DB_CONNECTION_STRING`。sqlcmd 候選 Credential 登入成功，但 Test connection direct check 失敗；修正本機 Credential / Connection String mismatch 後，Direct SUCCESS、Integration 51/51 PASS、Regression 261/261 PASS。Root cause 為 SQL Test Environment credential mismatch，非 Production Code Regression。案例不保存實際密碼或完整含 Credential 的連線字串。
+
+---
+
 ## 18. Phase 2 — Build Verification
 
 SQL Server 環境準備完成後，先執行：
@@ -724,6 +857,8 @@ LF / CRLF warning 可以回報，
 
 測試失敗必須先分類。
 
+細分類至少記錄：Container Failure、Authentication Failure、Connection String Format Failure、Environment Variable Failure、Test Process / Configuration Override Failure、Database Permission Failure、Migration / Test Infrastructure Failure、Implementation Failure、Existing Unrelated Failure。先依 §17.1 找共同 root cause，不只依失敗數量分類。
+
 ### A. Environment Failure
 
 包含：
@@ -748,6 +883,8 @@ Docker resource failure
 STOP
 → Report Environment Failure
 ```
+
+Authentication / Connection String / Environment Variable 問題先暫停 test run，允許依 §17.1～§17.7 非破壞性診斷及條件式 Recovery；成功後繼續驗證。無法在安全邊界內恢復、來源不明、缺少 Secret 或需改環境政策時 STOP 並回報。其餘 Environment Failure 沿用既有 STOP 規則。
 
 不得修改程式碼來繞過。
 
@@ -774,6 +911,8 @@ STOP
 除非目前 Task 明確包含這個 Scope。
 
 ### C. Implementation Failure
+
+SQL 相關功能失敗必須在 Direct SQL Connection SUCCESS、實際 Test Environment 已驗證且相關 setup 已成功後，才考慮此分類；build failure 仍依 §18。Migration setup failure 不直接等同功能 regression。
 
 例如：
 
@@ -1013,7 +1152,7 @@ Secret required but unavailable
 Connection String unavailable
 Port conflict without approved alternative
 SQL Server cannot become ready
-Authentication failure
+Authentication failure unresolved after safe diagnosis / recovery
 Database permission failure
 Build failure
 Target Integration Test failure
@@ -1031,6 +1170,8 @@ STOP 後：
 - 不修改測試語意
 - 不 Commit
 - 不 Push
+
+Authentication、Connection String 格式或 Environment inheritance 問題允許依 §17 的唯讀 Diagnosis / 條件式 Recovery，並不授權持續重試、不解除 Secret / ambiguity / policy STOP。Target Test 的共同 SQL setup failure 可進入該流程；功能斷言失敗仍立即停止並回到 task-implementation。需 reset sa、recreate container、delete volume、破壞性 DB 操作或未核准修改時，先回報具體需求與理由，等待明確批准。
 
 ---
 
@@ -1109,6 +1250,8 @@ git diff --check:
 - Passed count
 - Failed count
 - Skipped count（如果有）
+- Total count、Build errors / warnings、HEAD、Working Tree state
+- Direct Test Connection 結果、第一個真正 failure 的安全分類與診斷產物狀態
 
 ### Blocking Issues
 
