@@ -147,7 +147,7 @@ public sealed class UploadServiceTests
         Assert.DoesNotContain("rollback", rig.Events);
         Assert.Empty(rig.Deleted);
         Assert.Equal(operation == "queue", rig.Events.Contains("commit"));
-        Assert.Single(rig.Logger.Entries);
+        Assert.Single(rig.Failures);
     }
 
     // 錯誤分類依「發生的操作階段」判定，不可信任 dependency 丟出的 Exception 型別。
@@ -183,8 +183,8 @@ public sealed class UploadServiceTests
         Assert.Same(rig.Primary, error.InnerException);
         Assert.Equal(2, rig.Deleted.Count);
         Assert.Equal(new[] { UploadFailureStage.DatabaseSave, UploadFailureStage.StorageCompensation },
-            rig.Logger.Entries.Select(x => Assert.IsType<UploadFailureStage>(x.Fields["FailureStage"])));
-        Assert.Equal(rig.Deleted[0], rig.Logger.Entries[1].Fields["StorageKey"]);
+            rig.Failures.Select(x => Assert.IsType<UploadFailureStage>(x.Fields["FailureStage"])));
+        Assert.Equal(rig.Deleted[0], rig.Failures[1].Fields["StorageKey"]);
     }
 
     // 驗證 Upload failure 使用安全的 structured logging：
@@ -197,7 +197,7 @@ public sealed class UploadServiceTests
         var rig = new Rig { FailAt = "save2", CleanupFails = true,
             StoredPathOverride = invalidKey ? @"C:\private\secret.jpg" : null };
         await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
-        Assert.Equal(5, rig.Logger.Entries.Count); // primary + rollback + 2 deletes + dispose
+        Assert.Equal(5, rig.Failures.Count); // primary + rollback + 2 deletes + dispose
         string[] allowed = ["FailureStage", "ErrorCode", "BatchId", "ImageId", "JobId", "StorageKey", "{OriginalFormat}"];
         foreach (var entry in rig.Logger.Entries)
         {
@@ -209,7 +209,8 @@ public sealed class UploadServiceTests
             Assert.DoesNotContain("JWT", entry.Message);
             Assert.DoesNotContain("Authorization", entry.Message);
             Assert.DoesNotContain(@"C:\", entry.Message);
-            Assert.Equal(rig.Batch!.Id, entry.Fields["BatchId"]);
+            if (entry.EventId.Name != "TransactionStarted")
+                Assert.Equal(rig.Batch!.Id, entry.Fields["BatchId"]);
             if (invalidKey) Assert.Null(entry.Fields["StorageKey"]);
         }
     }
@@ -224,7 +225,8 @@ public sealed class UploadServiceTests
         var error = await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(3), rig.Token));
         Assert.Same(rig.Primary, error.InnerException);
         Assert.Equal(UploadFailureStage.QueueEnqueue, error.Stage);
-        var entry = rig.Logger.Entries[0];
+        var entry = Assert.Single(rig.Failures, x =>
+            Equals(x.Fields["FailureStage"], UploadFailureStage.QueueEnqueue));
         Assert.Equal(rig.Jobs[1].Id, entry.Fields["JobId"]);
         Assert.Equal(rig.Jobs[1].ImageId, entry.Fields["ImageId"]);
         Assert.Empty(rig.Deleted);
@@ -244,7 +246,7 @@ public sealed class UploadServiceTests
         Assert.DoesNotContain("queue", rig.Events);
         Assert.DoesNotContain("rollback", rig.Events);
         Assert.Empty(rig.Deleted);
-        Assert.Equal("Canceled", Assert.Single(rig.Logger.Entries).Fields["ErrorCode"]);
+        Assert.Equal("Canceled", Assert.Single(rig.Failures).Fields["ErrorCode"]);
     }
 
     // Upload 已成功且 Commit 完成後，如果只有 Transaction Dispose 失敗，
@@ -272,6 +274,70 @@ public sealed class UploadServiceTests
         Assert.Same(rig.Primary, error.InnerException);
         Assert.Equal(2, rig.Deleted.Count);
         Assert.Contains("rollback", rig.Events);
+    }
+
+    [Fact]
+    // 驗證成功 Upload 的正常 lifecycle logging。
+    // 應依序記錄 Transaction Start / Commit、每個 Job Enqueue 與 Upload Accepted，
+    // 且不得產生 Failure Log；Job Log 必須包含正確的 BatchId、JobId 與 ImageId。
+    public async Task AcceptedUpload_LogsNormalLifecycleAndJobIdentifiersWithoutFailures()
+    {
+        var rig = new Rig();
+        await rig.Service.UploadAsync(Request(2), rig.Token);
+        Assert.Empty(rig.Failures);
+        Assert.Equal(new[] { "TransactionStarted", "TransactionCommitted", "JobEnqueued", "JobEnqueued", "UploadAccepted" },
+            rig.Logger.Entries.Select(x => x.EventId.Name));
+        var queued = rig.Logger.Entries.Where(x => x.EventId.Name == "JobEnqueued").ToArray();
+        for (var i = 0; i < queued.Length; i++)
+        {
+            Assert.Equal(rig.Batch!.Id, queued[i].Fields["BatchId"]);
+            Assert.Equal(rig.Jobs[i].Id, queued[i].Fields["JobId"]);
+            Assert.Equal(rig.Jobs[i].ImageId, queued[i].Fields["ImageId"]);
+        }
+    }
+
+    [Fact]
+    // 模擬 Transaction 開始前的 Storage Save Failure。
+    // 驗證只記錄 StorageSave Failure，且只對已成功儲存的檔案開始 Compensation；
+    // 因 Transaction 尚未開始，不得記錄 Start / Rollback 或 UploadAccepted。
+    public async Task PreTransactionStorageFailure_LogsOneFailureAndOnlySuccessfulFileCompensation()
+    {
+        var rig = new Rig { FailAt = "store" };
+        await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Equal(UploadFailureStage.StorageSave, Assert.Single(rig.Failures).Fields["FailureStage"]);
+        var compensation = Assert.Single(rig.Logger.Entries, x => x.EventId.Name == "StorageCompensationStarted");
+        Assert.Equal(Assert.Single(rig.Deleted), compensation.Fields["StorageKey"]);
+        Assert.DoesNotContain(rig.Logger.Entries, x => x.EventId.Name is "TransactionStarted" or "TransactionRolledBack" or "UploadAccepted");
+    }
+
+    [Fact]
+    // 模擬 Database Save 失敗後執行 Rollback，且其中一次 Storage Compensation 再失敗。
+    // 驗證 Rollback 與每次 Compensation Attempt 都有正常 lifecycle Log，
+    // Failure Log 則只記錄原始 Database Failure 與實際 Compensation Failure，
+    // 不得誤記 TransactionCommitted 或 UploadAccepted。
+    public async Task RollbackAndPartialCompensation_LogNormalStagesWithoutDuplicatingFailures()
+    {
+        var rig = new Rig { FailAt = "save2", FailDeleteAt = 1 };
+        await Assert.ThrowsAsync<UploadFailureException>(() => rig.Service.UploadAsync(Request(2), rig.Token));
+        Assert.Single(rig.Logger.Entries, x => x.EventId.Name == "TransactionRolledBack");
+        Assert.Equal(2, rig.Logger.Entries.Count(x => x.EventId.Name == "StorageCompensationStarted"));
+        Assert.Equal(2, rig.Failures.Count);
+        Assert.Single(rig.Failures, x => Equals(x.Fields["FailureStage"], UploadFailureStage.StorageCompensation));
+        Assert.DoesNotContain(rig.Logger.Entries, x => x.EventId.Name is "TransactionCommitted" or "UploadAccepted");
+    }
+
+    [Fact]
+    // 模擬正常 lifecycle Logger 自身發生例外。
+    // Observability Failure 不得改變 Upload 的核心流程：
+    // Upload 仍須成功、Jobs 正常 Enqueue，且不得誤觸 Storage Compensation。
+    public async Task NormalLoggingFailure_DoesNotChangeSuccessfulAcceptance()
+    {
+        var rig = new Rig();
+        rig.Logger.ThrowOnLog = true;
+        var result = await rig.Service.UploadAsync(Request(2), rig.Token);
+        Assert.Equal(rig.Batch!.Id, result.BatchId);
+        Assert.Equal(2, rig.Events.Count(x => x == "queue"));
+        Assert.Empty(rig.Deleted);
     }
 
     // 建立測試用 UploadRequest。
@@ -319,6 +385,12 @@ public sealed class UploadServiceTests
 
         // Rig 自己同時實作 UploadService 所需的四個依賴。
         public readonly RecordingLogger<UploadService> Logger = new();
+
+        // 從全部 Upload lifecycle logs 中只篩選既有 Failure Event（9001），
+        // 避免新增的正常流程 Log 影響原有 Failure Logging 測試。
+        public IReadOnlyList<RecordingLogger<UploadService>.Entry> Failures =>
+            Logger.Entries.Where(x => x.EventId.Id == 9001).ToArray();
+
         public UploadService Service => new(this, this, this, this, Logger);
 
         // 記錄目前執行階段，並依測試設定模擬 Cancellation 或 Exception。

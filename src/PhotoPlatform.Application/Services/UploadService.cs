@@ -89,6 +89,7 @@ public sealed class UploadService(
             stage = UploadFailureStage.DatabaseBegin;
             cancellationToken.ThrowIfCancellationRequested();
             transaction = await persistence.BeginTransactionAsync(cancellationToken);
+            LogNormal(new EventId(11001, "TransactionStarted"), batchId);
 
             // 4. 建立 Batch / Image
             // 這段主要是在記憶體建立 Entity，還沒真正寫入 Database。
@@ -126,6 +127,7 @@ public sealed class UploadService(
             // Commit 成功後，Batch / Image / Job 已正式成立。
             // 後面即使 Queue 或 Cancellation 出錯，也不能再 Rollback 或刪除原始圖片。
             committed = true;
+            LogNormal(new EventId(11002, "TransactionCommitted"), batchId);
 
             // 9. 加入 Processing Queue
             stage = UploadFailureStage.QueueEnqueue;
@@ -136,9 +138,11 @@ public sealed class UploadService(
                 jobId = job.Id;
                 cancellationToken.ThrowIfCancellationRequested();
                 await queue.EnqueueAsync(job, cancellationToken);
+                LogNormal(new EventId(11003, "JobEnqueued"), batchId, imageId, jobId);
             }
             // Upload 接受流程完成。
             // 不代表後續圖片分析已經完成。
+            LogNormal(new EventId(11004, "UploadAccepted"), batchId);
             return new UploadResult(batch.Id, batch.TotalCount, batch.Status);
         }
         catch (Exception exception)
@@ -170,7 +174,8 @@ public sealed class UploadService(
                     try
                     {   // Cleanup 不使用原 Request token。
                         // 即使使用者已取消 Request，也要盡量完成 Rollback。
-                        await transaction.RollbackAsync(CancellationToken.None); }
+                        await transaction.RollbackAsync(CancellationToken.None);
+                        LogNormal(new EventId(11005, "TransactionRolledBack"), batchId); }
                     catch (Exception)
                     {
                         // Rollback 自己失敗只記錄，不能蓋掉原本真正造成 Upload 失敗的錯誤。
@@ -180,6 +185,7 @@ public sealed class UploadService(
                 // 刪除本次 Upload 已經成功存下來的檔案。
                 foreach (var path in paths)
                 {
+                    LogNormal(new EventId(11006, "StorageCompensationStarted"), batchId, storageKey: path);
                     try { await storage.DeleteAsync(path, CancellationToken.None); }
                     catch (Exception)
                     {
@@ -224,14 +230,39 @@ public sealed class UploadService(
             }
         }
     }
+
+    // 安全記錄 Upload 正常生命週期事件。
+    // 可記錄 Batch、Image、Job 與 Storage logical key，供後續追蹤與診斷。
+    // Logging 屬於 Observability，不得因 Logger 本身失敗而影響 Upload 或 Cleanup 流程。
+    private void LogNormal(EventId eventId, Guid? batchId, long? imageId = null,
+        long? jobId = null, string? storageKey = null)
+    {
+        try
+        {
+            logger.LogInformation(eventId,
+                "Upload lifecycle {BatchId}; image {ImageId}; job {JobId}; storage {StorageKey}",
+                batchId, imageId, jobId, SafeStorageKey(storageKey));
+        }
+        catch (Exception)
+        {
+            // Logging 失敗不得改變 Upload 接受結果或補償清理行為。
+        }
+    }
+
+
+    // 僅允許 original/{32字元 GUID} 格式的 logical storage key 寫入 Log。
+    // 不符合格式時回傳 null，避免實際 OS 路徑或其他非預期資訊進入 Log。
+    private static string? SafeStorageKey(string? key) => key is { Length: 41 }
+        && key.StartsWith("original/", StringComparison.Ordinal)
+        && Guid.TryParseExact(key.AsSpan(9), "N", out _) ? key : null;
+
     // 安全 Failure Logging
     private void LogFailure(UploadFailureStage stage, string code, Guid? batchId,
         long? imageId = null, long? jobId = null, string? storageKey = null)
     {
         // Storage Log 只允許系統定義的 logical key  original/{32字元 GUID}
         // 如果收到 OS 路徑或其他奇怪內容，就不寫進 Log。
-        var safeKey = storageKey is { Length: 41 } && storageKey.StartsWith("original/", StringComparison.Ordinal)
-            && Guid.TryParseExact(storageKey.AsSpan(9), "N", out _) ? storageKey : null;
+        var safeKey = SafeStorageKey(storageKey);
         try
         {
             // 只記錄安全的結構化資訊。

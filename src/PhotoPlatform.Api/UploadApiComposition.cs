@@ -27,6 +27,10 @@ public static class UploadApiComposition
         services.AddScoped<IUploadService, UploadService>();
         services.AddScoped<IUploadPersistence, UploadPersistence>();
 
+        // 註冊 Batch 狀態查詢服務與唯讀持久化實作，由 DI 依 Interface 注入對應實例。
+        services.AddScoped<IBatchStatusQuery, BatchStatusQuery>();
+        services.AddScoped<IBatchStatusPersistence, BatchStatusPersistence>();
+
         // 註冊 EF Core DbContext，並使用設定中的 SQL Server 連線字串。
         services.AddDbContext<PhotoPlatformDbContext>(options => options.UseSqlServer(
             Required(configuration, "ConnectionStrings:PhotoPlatform")));

@@ -4,6 +4,8 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using System.Data.Common;
 using PhotoPlatform.Application.DTOs;
 using PhotoPlatform.Application.Exceptions;
 using PhotoPlatform.Infrastructure.Storage;
@@ -63,6 +65,78 @@ public sealed class UploadPersistenceTests : IAsyncLifetime
     private PhotoPlatformDbContext CreateContext() => new(_options ?? throw new InvalidOperationException("Database has not been initialized."));
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    // 使用真實 SQL Server 驗證 Batch Status Query。
+    // 確認 Batch 存在時可正確取得狀態，不存在時回傳 null；
+    // 同時驗證查詢使用新的 DbContext、AsNoTracking 與單次 Projection，
+    // 只查詢 batches 所需欄位，不額外查詢或 JOIN Images / ProcessingJobs。
+    public async Task BatchStatusQuery_UsesOneUntrackedProjectionFromNewContext(bool exists)
+    {
+        var id = Guid.NewGuid();
+        if (exists)
+        {
+            await using var seed = CreateContext();
+            var batch = new Batch(id, 100, CreatedAt);
+            seed.Batches.Add(batch);
+            // 直接建立已持久化的處理結果作為測試資料，
+            // 避免為了準備測試資料而額外觸發 Domain lifecycle 行為。
+            seed.Entry(batch).Property(x => x.ProcessedCount).CurrentValue = 80;
+            seed.Entry(batch).Property(x => x.SuccessCount).CurrentValue = 78;
+            seed.Entry(batch).Property(x => x.FailedCount).CurrentValue = 2;
+            seed.Entry(batch).Property(x => x.Status).CurrentValue = "Processing";
+            await seed.SaveChangesAsync();
+        }
+        // 註冊測試用 SQL Interceptor，記錄 EF Core 實際執行的 SQL 與查詢參數。
+        var commands = new QueryCommands();
+        var options = new DbContextOptionsBuilder<PhotoPlatformDbContext>(_options!)
+            .AddInterceptors(commands).Options;
+
+        // 使用新的 DbContext 執行查詢，避免受到 Seed Context Tracking 狀態影響。
+        await using var read = new PhotoPlatformDbContext(options);
+        var result = await new BatchStatusQuery(new BatchStatusPersistence(read))
+            .GetBatchStatusAsync(id, CancellationToken.None);
+        if (exists)
+            Assert.Equal(new BatchStatusResult(id, 100, 80, 78, 2, 80m, "Processing"), result);
+        else
+            Assert.Null(result);
+
+        // Batch Status 為唯讀查詢，AsNoTracking 後不應留下任何追蹤中的 Entity。
+        Assert.Empty(read.ChangeTracker.Entries());
+
+        // 整個 Batch Status 查詢只能執行一次 SQL，
+        // 且只從 batches 投影需要的欄位，不查 Images / ProcessingJobs、不使用 JOIN。
+        var sql = Assert.Single(commands.Commands);
+        Assert.Contains("[batches]", sql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("[images]", sql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("[processing_jobs]", sql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("CreatedAt", sql);
+        Assert.DoesNotContain("CompletedAt", sql);
+        Assert.DoesNotContain("JOIN", sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(id, commands.BatchId);
+    }
+
+    // 測試專用 EF Core SQL Interceptor。
+    // 攔截實際執行的讀取 SQL，記錄 SQL 文字與 BatchId Parameter，
+    // 用來驗證 Query 是否維持單次、精簡且正確參數化的查詢。
+    private sealed class QueryCommands : DbCommandInterceptor
+    {
+        public List<string> Commands { get; } = [];
+        public Guid? BatchId { get; private set; }
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            // 記錄 EF Core 實際送出的 SQL。
+            Commands.Add(command.CommandText);
+
+            // 此 Query 預期只有一個 BatchId Parameter，並確認其型別為 Guid。
+            BatchId = Assert.IsType<Guid>(Assert.Single(command.Parameters.Cast<DbParameter>()).Value);
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     // 使用真實 HTTP、SQL 與 Storage 跑完整 Upload 流程。
@@ -117,6 +191,16 @@ public sealed class UploadPersistenceTests : IAsyncLifetime
         Assert.Equal(1, await verification.Batches.CountAsync());
         Assert.Equal(2, await verification.Images.CountAsync());
         Assert.Equal(2, await verification.ProcessingJobs.CountAsync());
+
+        var persistedId = await verification.Batches.Select(x => x.Id).SingleAsync();
+        using var statusResponse = await host.Client.GetAsync($"/api/v1/images/batches/{persistedId}/status");
+        Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
+        using var statusJson = JsonDocument.Parse(await statusResponse.Content.ReadAsStringAsync());
+        var statusData = statusJson.RootElement.GetProperty("data");
+        Assert.Equal(persistedId, statusData.GetProperty("batchId").GetGuid());
+        Assert.Equal(2, statusData.GetProperty("totalCount").GetInt32());
+        Assert.Equal(0m, statusData.GetProperty("progressPercentage").GetDecimal());
+        Assert.Equal("Pending", statusData.GetProperty("status").GetString());
 
         // 再確認 Storage 中的原始檔案仍然存在，證明 Commit 後的 Queue 失敗沒有觸發錯誤補償刪檔。
         foreach (var image in await verification.Images.ToListAsync())

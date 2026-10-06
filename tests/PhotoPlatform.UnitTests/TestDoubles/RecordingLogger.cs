@@ -10,10 +10,12 @@ using Microsoft.Extensions.Logging;
 
 namespace PhotoPlatform.UnitTests.TestDoubles;
 
-// 同時保存結構化欄位、格式化輸出與 exception 參數，避免只測 rendered message 漏掉敏感資料。
+// 測試用 Logger，保存每次 Log 的訊息、Exception、結構化欄位、EventId 與 LogLevel。
+// 讓測試可依事件識別 Log，而非依賴 Log 筆數或固定位置。
 internal sealed class RecordingLogger<T> : ILogger<T>
 {
-    public sealed record Entry(string Message, Exception? Exception, IReadOnlyDictionary<string, object?> Fields);
+    public sealed record Entry(string Message, Exception? Exception, IReadOnlyDictionary<string, object?> Fields,
+        EventId EventId, LogLevel Level);
     public List<Entry> Entries { get; } = [];
     public bool ThrowOnLog { get; set; }
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -23,6 +25,6 @@ internal sealed class RecordingLogger<T> : ILogger<T>
     {
         if (ThrowOnLog) throw new InvalidOperationException("Logger unavailable.");
         var fields = ((IEnumerable<KeyValuePair<string, object?>>)(object)state!).ToDictionary(x => x.Key, x => x.Value);
-        Entries.Add(new(formatter(state, exception), exception, fields));
+        Entries.Add(new(formatter(state, exception), exception, fields, eventId, logLevel));
     }
 }
