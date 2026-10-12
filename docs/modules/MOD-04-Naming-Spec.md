@@ -1,5 +1,11 @@
 # 04 — Naming Module
 
+> **規格修訂草稿（2026-10-12）**：以 develop `8ff1dd983af2ffa68dfc93893f9cca61fadb2c90` 為基準。
+> MOD-01 feature `a1bb29e1d7cf704a202adbe1c14741b6441575be` 僅為交接證據，未合併進 develop。
+> 已核准與待決策內容分開記錄於 [規格審閱與決策紀錄](../reviews/Specification-Revision-Review.md)。
+> F-01～F-08已核准並同步至最終契約章；同題舊待決文字由最終章取代。引擎/精確版本N-01與實作驗收仍未完成；不是TASK、實作或PASS授權。
+
+
 > Module-Level Specification  
 > 本文件定義 Naming Module 的功能、業務規則、資料依賴、API Contract 與測試要求。  
 > AI Agent 實作本模組時，應以本文件為主要依據；若與 System-Level Specification 衝突，以 System-Level Specification 為準。
@@ -52,10 +58,10 @@ Naming Module 必須提供：
 | Filename Sanitization | 處理非法檔名字元 |
 | Filename Validation | 驗證檔名是否合法 |
 | Collision Detection | 檢查目標檔名是否已存在 |
-| Preview | 預覽 Rename 結果 |
-| Apply | 正式執行 Rename |
-| Rename Result | 回傳每張圖片的處理結果 |
-| ProcessingLog | 記錄 Naming / Rename 結果 |
+| Preview | 預覽 Artifact Creation 結果 |
+| Apply | 正式執行 Artifact Creation |
+| Artifact Creation Result | 回傳每張圖片的處理結果 |
+| ProcessingLog | 記錄 Naming / Artifact Creation 結果 |
 
 ---
 
@@ -74,8 +80,8 @@ Filename Sanitization
 Filename Validation
 Collision Detection
 Preview
-Rename Apply
-Rename Result
+Artifact Creation Apply
+Artifact Creation Result
 Naming ProcessingLog
 Naming API Contract
 ```
@@ -275,7 +281,7 @@ Metadata 缺失時使用既定 Fallback：
 
 | Metadata | Fallback |
 |---|---|
-| `TakenAt` | `FileCreatedAt` |
+| `TakenAt` | `Image.CreatedAt（UploadCreatedAt fallback）` |
 | `LocationName` | `UnknownLoc` |
 | `CameraModel` | `UnknownCamera` |
 | `OriginalFileName` | 不允許 Fallback |
@@ -652,7 +658,7 @@ Path Traversal detected
         ↓
 Reject Request
         ↓
-Do not Rename
+Do not Artifact Creation
 ```
 
 ---
@@ -673,7 +679,7 @@ Naming Module 不得建立一套與 System-Level Validation Policy 衝突的長�
 
 ## 1.16 Filename Collision
 
-Rename 不得覆蓋已存在的檔案。
+Artifact Creation 不得覆蓋已存在的檔案。
 
 MVP 支援：
 
@@ -757,7 +763,7 @@ ErrorCode = FILENAME_COLLISION
 
 ## 1.17 Preview
 
-Preview 用於在正式 Rename 前讓使用者確認結果。
+Preview 用於在正式 Artifact Creation 前讓使用者確認結果。
 
 Preview：
 
@@ -783,7 +789,7 @@ ProcessingJobs
 
 ## 1.18 Apply
 
-Apply 是正式執行 Rename。
+Apply 是正式執行 Artifact Creation。
 
 Apply 不得直接使用 Preview 的舊結果。
 
@@ -794,7 +800,7 @@ File Deleted
 File Changed
 Target Filename Occupied
 Storage Changed
-Concurrent Rename
+Concurrent Artifact Creation
 ```
 
 因此 Apply 必須重新：
@@ -814,7 +820,7 @@ Validate
         ↓
 Collision Check
         ↓
-Rename
+Artifact Creation
 ```
 
 ---
@@ -852,7 +858,7 @@ Generate
  ↓
 Collision Check
  ↓
-Rename File
+Create Naming Artifact
  ↓
 Update Database
  ↓
@@ -863,7 +869,7 @@ Preview 結果不能被視為 Apply 一定成功。
 
 ---
 
-## 1.20 Rename Result
+## 1.20 Artifact Creation Result
 
 每張圖片至少回傳：
 
@@ -913,7 +919,7 @@ Naming 相關錯誤：
 | `FILENAME_TOO_LONG` | 400 | Filename 超過限制 |
 | `IMAGE_NOT_FOUND` | 404 | 圖片不存在 |
 | `FILENAME_COLLISION` | 409 | 無法解決檔名衝突 |
-| `RENAME_FAILED` | 500 | Rename 執行失敗 |
+| `RENAME_FAILED` | 500 | Artifact Creation 執行失敗 |
 | `STORAGE_ERROR` | 500 | Storage 操作失敗 |
 | `INTERNAL_ERROR` | 500 | 未預期錯誤 |
 
@@ -930,49 +936,16 @@ Internal Exception Details
 
 ---
 
-## 1.22 Rename Reliability
+## 1.22 Artifact Creation Reliability
 
-File Rename 與 Database Update 不屬於同一 Atomic Transaction。
-
-可能發生：
-
-```text
-File Rename
-    ↓
-Success
-    ↓
-Database Update
-    ↓
-Failure
-```
-
-因此 Application Layer 必須依 System-Level 定義的 Compensation Strategy 處理。
-
-必要時：
-
-```text
-New File
-   ↓
-Compensation
-   ↓
-Original File
-```
-
-如果 Compensation 也失敗：
-
-```text
-Status = Failed
-ProcessingLog = Failed
-TraceId = Preserved
-```
-
-Naming Module 不自行建立新的跨系統 Transaction 機制。
+原始物件與StoredPath保持不變。artifact建立與Database Update不是同一Atomic Transaction；Storage成功但結果保存前中斷須用OperationId/Inspect核對，不建立第二份artifact。確認receipt/來源/目標一致後才補T3保存並通知；無法確認先阻擋。
+reapply、artifact保留與清理政策仍待決，未核准前不得自動清理（包括失敗、取消、孤立artifact）；不能以Compensation為由刪原檔或artifact，也沒有「改名回原檔」操作。receipt mapping與未知副作用處置依F-02最終章/共用Schema，不隨便標Success或消耗新Step retry。
 
 ---
 
 ## 1.23 Concurrency
 
-Naming Module 必須考慮並行 Rename。
+Naming Module 必須考慮並行 Artifact Creation。
 
 例如：
 
@@ -994,7 +967,7 @@ Check Exists
 ```text
 Check Exists
       ↓
-Attempt Rename
+Attempt Artifact Creation
       ↓
 Actual Storage Result
 ```
@@ -1011,7 +984,7 @@ Actual Storage Result
 
 ## 1.24 Idempotency
 
-Naming Apply 必須避免已完成的 Job 被重複 Rename。
+Naming Apply 必須避免已完成的 Job 被重複 Artifact Creation。
 
 以：
 
@@ -1137,7 +1110,7 @@ Collision Detection
       ↓
 Preview / Apply
       ↓
-Rename Result
+Artifact Creation Result
       ↓
 ProcessingLog
 ```
@@ -1151,12 +1124,36 @@ User Confirmation
    ↓
 Re-validation
    ↓
-File Rename
+Naming Artifact Creation
    ↓
 Database Update
    ↓
 ProcessingLog
 ```
+
+---
+
+## 與 MOD-02 的已核准執行契約
+
+- MVP 單 Instance、多 Worker，MOD-02 以 SQL Server 原子 Claim 取得 Job 執行權；本模組不建立 Queue、Worker 或平行重試排程器。
+- 每Run的每個transient Step由MOD-02管理四個邏輯槽位0～3，重試等待1／2／4秒；Shutdown Resume沿用槽位而另記invocation，本模組不疊加retry loop。
+- host shutdown cancellation 向上傳播、不算 Retry；中斷由 MOD-02 處理，不能偽裝成 module failure 或 fallback。已提交成功結果需核對可重用性，不重做副作用。
+- Job Status、Step Result、Log Status 不混用；失敗由 MOD-02 協調持久化 Job transition，本模組不直接改其 enum。
+- D-05／D-06已核准MOD-02單一History writer、Run／checkpoint／invocation、提交後best-effort事件；Step從checkpoint映射、Timestamp為Log建立時間，schema見共用文件§3～§6。子模組回報Outcome，不重複寫History。
+- 保留每次 attempt History，重要 operation 安全保留 JobId／ImageId／TraceId；沿用 ILogger<T>，不輸出 raw exception／SQL／path／secrets，不重複 MOD-01 failure event。
+- 本模組的新增契約缺口與決策選項見 `docs/reviews/Specification-Revision-Review.md`；未決事項不能以一般實作細節自行補足。
+
+
+### MOD-04 獨立審閱缺口（未核准）
+
+- M04-01／Major：Naming／Full Upload Workflow 只有 Workflow，沒有 Template、image order、sequenceStart／collisionPolicy 的持久化 Context。§3.4 與 §4.3 的 background Request／Batch identity 如何接到既有 Job 待 D-09，不能從 Queue 以默認 Template 補完。
+- M04-02／Major：MOD-01 StoredPath = original/{guid} 且無副檔名；§1.12 原始副檔名必須由 OriginalFileName 取得，不從 StoredPath 猜。本批D-09核准保留original＋建立artifact，StoredPath不改；獨立read/artifact abstraction，具體簽章與mapping待確認。
+- M04-03／Major：§1.13 Sanitization 具體替換／reserved basename／空結果政策未定義；必須保留 §1.14 traversal Reject，不能先 sanitize 後把危險 path 轉為可接受。
+- M04-04／Major：§1.16 NumericSuffix／Sequence 的 retry 上限、同一次 Request 內 collision、重複 imageIds、sequence overflow 與 length limits 未定。不得用無限 loop 或自行挑選上限。
+- M04-05／Major：{OriginalExtension} 與 §1.12 自動補副檔名可能重複；§1.24 已完成 Job skip 與再次 Apply 新 Template 的重新分析語意未定，見 D-04／D-09。
+- M04-06／Major（部分解除）：D-06已批准History Skipped、D-07以PrimaryJob計數；Naming Collision Skip按F-02/F-07明確Item終態可完成對應Step，但不是artifact成功；其他必要Step仍須完成。
+
+已確認：Preview 不寫檔案、Image、Job 或 Log；Apply 重新驗證，原子 Storage no-overwrite 作最後防線。重要驗收包含 Crash after artifact creation before DB、compensation failure、同 target Race、原始檔案保留以及 retry 不二次 Artifact Creation；具體驗收預期需先完成 D-09。
 
 ---
 
@@ -1295,12 +1292,12 @@ AI Agent 實作時，以下規則視為 **MUST**：
 12. Filename 必須經過 Sanitization。
 13. Path Traversal 必須拒絕。
 14. Filename 過長必須拒絕。
-15. Rename 不得覆蓋既有檔案。
+15. Artifact Creation 不得覆蓋既有檔案。
 16. Preview 不得修改檔案或 Database。
 17. Apply 必須重新驗證。
 18. Apply 必須重新進行 Collision Check。
 19. File Operation 與 Database Transaction 不視為同一 Atomic Transaction。
-20. 已完成 Job 不得重複 Rename。
+20. 已完成 Job 不得重複 Artifact Creation。
 21. 不得重新執行其他 Module 的分析工作。
 22. API 必須遵守 Global Error Contract。
 
@@ -1325,7 +1322,7 @@ Naming Module
        ▼
 Storage
        │
-       └── File Rename
+       └── Naming Artifact Creation
 ```
 
 Naming Module 使用：
@@ -1391,6 +1388,14 @@ Naming Module 不得自行修改系統級規則。
 
 ---
 
+### D-05～D-07 同步限制
+
+只有binding／版本／Context可確認且T1／T2已原子提交Running Log後才開始本模組。結果／History保存重試不重做模組操作，也不消耗business retry budget。
+程序在T3前中斷時memory可能遺失；只讀計算需可重現Input／RuleVersion才能安全重算；已有SQL／Group／Storage副作用先核對，不因未保存checkpoint盲目重做。
+Unknown副作用／Context先阻擋。PrimaryJob才更新Image／BatchStatus，secondary不改Uploadaggregate。F-01～F-08的結果/版本/receipt已同步最終章；Analysis/Full尚有N-01/N-02，實作與驗收未完成。
+
+---
+
 # 2. 資料表結構
 
 ## 2.1 Table Overview
@@ -1403,7 +1408,7 @@ Naming Module 不建立專用 Naming Table。
 |---|---|
 | `Images` | 取得圖片、原始檔名、Metadata、Storage Path，並保存新檔名 |
 | `ProcessingJobs` | 建立與追蹤 Naming Job |
-| `ProcessingLogs` | 記錄 Naming / Rename 結果 |
+| `ProcessingLogs` | 記錄 Naming / Artifact Creation 結果 |
 
 `Batches` 由其他 Module 管理。
 
@@ -1417,6 +1422,15 @@ Images.BatchId
 
 ---
 
+## 共用 Schema 與交接基線
+
+physical mapping 以 `docs/Database-Schema.md` 已確認部分為共同依據；尚未定案的欄位、索引與關係明列為待決策，不假設不存在的原始 Database-Schema.md 已提供答案。
+沿用 MOD-01 Image.Id BIGINT、BatchId uniqueidentifier、DateTimeOffset／datetimeoffset(7) 與 Unicode mapping。
+SQL Server timestamp／rowversion 不是日期時間；日期不得以 TIMESTAMP mapping 實作。
+MOD-01 feature 尚未合併；TASK-11／12 最新驗收維持待確認，不能把後續模組未完成判作 MOD-01 Backend 缺陷。
+
+---
+
 ## 2.2 Images
 
 Naming Module 使用：
@@ -1424,15 +1438,15 @@ Naming Module 使用：
 | 欄位 | 型別 | Nullable | Key / Index | 用途 |
 |---|---|---|---|---|
 | `Id` | BIGINT | No | PK | Image ID |
-| `BatchId` | UUID | No | FK / Index | Batch |
-| `OriginalFileName` | VARCHAR(255) | No | — | 原始檔名 |
+| `BatchId` | UNIQUEIDENTIFIER | No | FK / Index | Batch |
+| `OriginalFileName` | NVARCHAR(255) | No | — | 原始檔名 |
 | `StoredPath` | VARCHAR(500) | No | — | Storage Path |
-| `NewFileName` | VARCHAR(255) | Yes | — | Rename 後檔名 |
-| `TakenAt` | TIMESTAMP | Yes | Index | 拍攝時間 |
-| `CameraModel` | VARCHAR(100) | Yes | — | 相機型號 |
-| `LocationName` | VARCHAR(150) | Yes | — | 地點 |
+| `NewFileName` | NVARCHAR(255) | Yes | — | Artifact Creation 後檔名 |
+| `TakenAt` | DATETIMEOFFSET(7) | Yes | Index | 拍攝時間 |
+| `CameraModel` | NVARCHAR(100) | Yes | — | 相機型號 |
+| `LocationName` | NVARCHAR(150) | Yes | — | 地點 |
 | `Status` | VARCHAR(30) | No | Index | Image Status |
-| `UpdatedAt` | TIMESTAMP | No | — | 更新時間 |
+| `UpdatedAt` | DATETIMEOFFSET(7) | No | — | 更新時間 |
 
 Naming Module 不得修改未列出的 Schema 定義。
 
@@ -1446,15 +1460,15 @@ Naming Apply 若採 Background Processing，使用既有 `ProcessingJobs`。
 |---|---|---|---|---|
 | `Id` | BIGINT | No | PK | Job ID |
 | `ImageId` | BIGINT | No | FK / Index | Image |
-| `BatchId` | UUID | No | FK / Index | Batch |
+| `BatchId` | UNIQUEIDENTIFIER | No | FK / Index | Batch |
 | `Workflow` | VARCHAR(30) | No | Unique / Index | Workflow |
 | `Status` | VARCHAR(30) | No | Index | Job Status |
 | `RetryCount` | INT | No | — | Retry 次數 |
-| `CreatedAt` | TIMESTAMP | No | — | 建立時間 |
-| `StartedAt` | TIMESTAMP | Yes | — | 開始時間 |
-| `CompletedAt` | TIMESTAMP | Yes | — | 完成時間 |
+| `CreatedAt` | DATETIMEOFFSET(7) | No | — | 建立時間 |
+| `StartedAt` | DATETIMEOFFSET(7) | Yes | — | 開始時間 |
+| `CompletedAt` | DATETIMEOFFSET(7) | Yes | — | 完成時間 |
 | `ErrorCode` | VARCHAR(50) | Yes | — | 錯誤代碼 |
-| `ErrorMessage` | TEXT | Yes | — | 錯誤訊息 |
+| `ErrorMessage` | NVARCHAR(MAX) | Yes | — | 錯誤訊息 |
 
 既有 Constraint：
 
@@ -1472,25 +1486,10 @@ Workflow = Naming
 
 ## 2.4 ProcessingLogs
 
-| 欄位 | 型別 | Nullable | Key / Index | 用途 |
-|---|---|---|---|---|
-| `Id` | BIGINT | No | PK | Log ID |
-| `ImageId` | BIGINT | No | FK / Index | Image |
-| `Step` | VARCHAR(50) | No | Index | Processing Step |
-| `Status` | VARCHAR(20) | No | — | 執行狀態 |
-| `ErrorCode` | VARCHAR(50) | Yes | — | Error Code |
-| `ErrorMessage` | TEXT | Yes | — | Error Message |
-| `DurationMs` | BIGINT | Yes | — | 執行時間 |
-| `RetryCount` | INT | No | — | Retry 次數 |
-| `TraceId` | VARCHAR(100) | Yes | Index | Trace ID |
-| `Timestamp` | TIMESTAMP | No | Index | 發生時間 |
-
-Naming 使用：
-
-```text
-NAMING
-FILE_RENAME
-```
+使用共用 `docs/Database-Schema.md` §5，不在Naming重建History表；Step由checkpoint關聯取得。
+Log.Id為BIGINT identity，JobId／ImageId、checkpoint關聯的Step、Status、Error、DurationMs、RetryOrdinal／ResumeNo／AttemptNo、TraceId、Timestamp依共用契約；舊Query retryCount映射RetryOrdinal，不是physical欄位。
+本模組使用 NAMING／FILE_RENAME 的 Step Result；Log Status 和 Job Status 分開，不自行新增 Log enum／索引。
+Preview為read-only不寫ProcessingLogs；background attempt的單一writer／提交順序依D-06。Naming RequestContext／Create/Inspect reconciliation依F-02最終章，未知副作用仍阻擋。
 
 ---
 
@@ -1510,7 +1509,7 @@ ProcessingJobs.BatchId
 ProcessingJobs.Status
 
 ProcessingLogs.ImageId
-ProcessingLogs.Step
+ProcessingStepCheckpoints.Step（Query join，不是新增Standalone Index批准）
 ProcessingLogs.Timestamp
 ProcessingLogs.TraceId
 ```
@@ -1556,8 +1555,8 @@ API：
 
 | Method | Endpoint | 用途 |
 |---|---|---|
-| POST | `/api/v1/images/naming/preview` | 預覽 Rename |
-| POST | `/api/v1/images/naming/apply` | 正式 Rename |
+| POST | `/api/v1/images/naming/preview` | 預覽 Artifact Creation |
+| POST | `/api/v1/images/naming/apply` | 正式 Artifact Creation |
 
 API 必須遵守：
 
@@ -1585,7 +1584,7 @@ POST /api/v1/images/naming/preview
 Preview：
 
 ```text
-不得 Rename
+不得 Artifact Creation
 不得修改 Database
 ```
 
@@ -1605,7 +1604,7 @@ POST /api/v1/images/naming/apply
 
 用途：
 
-> 正式執行圖片 Rename。
+> 正式執行圖片 Artifact Creation。
 
 若使用 Background Processing：
 
@@ -1613,7 +1612,7 @@ POST /api/v1/images/naming/apply
 202 Accepted
 ```
 
-API 建立 Job 後立即返回，不等待整個 Rename Workflow 完成。
+API 建立 Job 後立即返回，不等待整個 Artifact Creation Workflow 完成。
 
 ---
 
@@ -1848,7 +1847,7 @@ Internal Exception Details
 | `400` | Validation Error |
 | `404` | Image Not Found |
 | `409` | Filename Collision |
-| `500` | Rename / Storage / Internal Error |
+| `500` | Artifact Creation / Storage / Internal Error |
 
 ---
 
@@ -2023,7 +2022,7 @@ Sequence：
 
 ```text
 TakenAt missing
-→ FileCreatedAt
+→ Image.CreatedAt（UploadCreatedAt fallback）
 ```
 
 ```text
@@ -2075,7 +2074,7 @@ C:\Windows\file.jpg
 
 ```text
 Request Rejected
-No Rename
+No Artifact Creation
 ```
 
 ---
@@ -2140,7 +2139,7 @@ ProcessingJobs
 Apply：
 
 ```text
-File Rename
+Naming Artifact Creation
 Database Update
 ProcessingLog
 ```
@@ -2183,7 +2182,7 @@ Execute Again
 Skip
 ```
 
-確保不會發生二次 Rename。
+確保不會發生二次 Artifact Creation。
 
 ---
 
@@ -2202,7 +2201,7 @@ Request B
 預期：
 
 ```text
-最多一個 Rename 直接成功
+最多一個 Artifact Creation 直接成功
 其他 Request 必須重新處理 Collision
 ```
 
@@ -2256,7 +2255,7 @@ File unchanged
 ```text
 Application Service
  ↓
-Storage Rename
+Storage Artifact Creation
  ↓
 Images.NewFileName
  ↓
@@ -2309,7 +2308,7 @@ RetryCount
 模擬：
 
 ```text
-Storage Rename Failure
+Storage Artifact Creation Failure
 ```
 
 確認能正確轉換為：
@@ -2333,7 +2332,7 @@ STORAGE_ERROR
 測試：
 
 ```text
-File Rename Success
+Naming Artifact Creation Success
         ↓
 Database Update Failure
 ```
@@ -2537,7 +2536,7 @@ UnknownLoc_001.jpg
 
 ---
 
-## E2E-10 Rename Failure
+## E2E-10 Artifact Creation Failure
 
 ```text
 Naming Apply
@@ -2758,7 +2757,7 @@ Database unchanged
 Apply 成功後：
 
 ```text
-File renamed
+File artifact creationd
 Database updated
 ProcessingLog created
 ```
@@ -2787,7 +2786,7 @@ Re-check Collision
 success = false
 error.code
 error.message
-traceId
+error.traceId
 ```
 
 不得包含：
@@ -2823,7 +2822,7 @@ Connection String
 - [ ] Collision Detection
 - [ ] Preview
 - [ ] Apply
-- [ ] Rename Result
+- [ ] Artifact Creation Result
 - [ ] Idempotency
 - [ ] Concurrency Handling
 
@@ -2889,7 +2888,7 @@ Connection String
 - [ ] Playwright Collision E2E
 - [ ] Playwright Invalid Template E2E
 - [ ] Playwright Metadata Fallback E2E
-- [ ] Playwright Rename Failure E2E
+- [ ] Playwright Artifact Creation Failure E2E
 
 ---
 
@@ -2922,7 +2921,7 @@ Connection String
        ↓
 10. Database Integration
        ↓
-11. Storage Rename
+11. Storage Artifact Creation
        ↓
 12. API
        ↓
@@ -3006,7 +3005,7 @@ Preview
    ↓
 Apply
    ↓
-Storage Rename
+Storage Artifact Creation
    ↓
 Database Update
    ↓
@@ -3054,7 +3053,7 @@ Collision Policy
 ```text
 New Filename
 +
-Rename Result
+Artifact Creation Result
 +
 ProcessingLog
 ```
@@ -3082,7 +3081,7 @@ Preview
  ↓
 Re-validate
  ↓
-Rename
+Artifact Creation
  ↓
 Persist
 ```
@@ -3156,3 +3155,20 @@ Naming Module
 ```
 
 這個結構就是本 Module 的標準文件骨架，後續其他 Module 可以沿用相同格式。
+
+# 最終核准契約 — F-02（文件審核版）
+
+命名是建立artifact，不是rename/move原檔；original bytes與StoredPath不變。只有PrimaryJob可投影NewFileName。舊FILE_RENAME／RENAME_FAILED是兼容識別，不表示搬原檔。
+
+## Application與持久輸入
+
+IImageContentReader.OpenOriginalAsync(ImageId,token)回ContentHandle(Stream,Length,ContentVersion)，caller dispose、不承諾seek；Infrastructure核對reference／原內容SHA256，client不傳path。INamingArtifactStorage.CreateAsync(OperationId,ImageId,ExpectedContentVersion,TargetName,token)回ArtifactReceipt；InspectAsync(OperationId,token)回Missing/Complete/Unknown與receipt。相同operation同payload返回同結果，不同payload拒絕；provider做conditional no-overwrite。
+NamingRequest含BatchId、Template、RuleVersion、CollisionPolicy、InputFingerprint；Item綁對應Image/Job、固定Ordinal/Sequence、OriginalExtension與ResolvedInput，Run引用Item。Template無來源時不Claim、不生成默認Template，不修改MOD-01 Upload input。
+Start預設1、>=0，Increment沿用MVP固定1，checked BIGINT；digits只padding、不截斷。重複ImageId/跨Batch/overflow/非法空或reserved名/path traversal拒絕。extension來自OriginalFileName，已含同extension不再加，矛盾extension拒絕。Preview非强制且零寫入；Apply重新校驗凍結input。
+collision候選最多100（原名第一個、99穩定suffix），可設定、未效能驗證；request內衝突同樣reservation/no-overwrite。Skip是顯式Item終態，不是artifact Success；NAMING/FILE_RENAME checkpoint以Skipped完成，不將任意Skip當Job完成。100耗盡FILENAME_COLLISION Permanent Failed，RENAME_FAILED安全message寫artifact creation failure。
+
+## 操作與crash恢復
+
+保存Prepared與target reservation→Create artifact→Inspect核對receipt/source/target→T3保存result/checkpoint/History/Primary投影→commit後通知。Storage與DB不在同一transaction；未知結果NeedsReconciliation且不執行。已建立但未保存SQL結果須補T3、不重建。shutdown同Run/Input/OperationId恢復，人工Retry新Run沿用原Naming input，結果重用須Inspect，不新增第二份artifact。
+reservation對scope內provider-normalized TargetKey唯一；Local實際case-sensitivity/Unicode與GCS策略由adapter契約核對，不能只用memory Exists→Create。receipt須可證明本operation與content，不以單純目標存在當成功。
+reapply、Completed重分析、保留／清理延後；未核准不得自動清理artifact/reservation/孤立物件，不以Compensation刪原檔或artifact。部署須承擔storage增長，沒有修復/unblock/cleanup寫API。本輪只規格，不建TASK/實作/遷移。

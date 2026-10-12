@@ -1,5 +1,11 @@
 # Monitoring Module Specification
 
+> **規格修訂草稿（2026-10-12）**：以 develop `8ff1dd983af2ffa68dfc93893f9cca61fadb2c90` 為基準。
+> MOD-01 feature `a1bb29e1d7cf704a202adbe1c14741b6441575be` 僅為交接證據，未合併進 develop。
+> 已核准與待決策內容分開記錄於 [規格審閱與決策紀錄](../reviews/Specification-Revision-Review.md)。
+> F-01～F-08已核准並同步至最終契約章；同題舊待決文字由最終章取代。引擎/精確版本N-01與實作驗收仍未完成；不是TASK、實作或PASS授權。
+
+
 **文件名稱：** Monitoring Module Specification  
 **模組編號：** MOD-09  
 **模組名稱：** Monitoring Module  
@@ -126,11 +132,11 @@ Monitoring Module 不應接管 Processing Module 的 Job Execution。
 Monitoring 本身的處理流程：
 
 ```text
-Processing State Change
+Processing State Change／Step Result
         ↓
-Update Monitoring Data
+由 MOD-02 單一 lifecycle writer 確認 History 已提交
         ↓
-Create ProcessingLog
+Read Persisted State／History
         ↓
 Publish Monitoring Event
         ↓
@@ -245,6 +251,15 @@ FailedCount = 2
 
 ---
 
+### D-07 aggregate 投影
+
+Primary Job為原UploadJob，binding未確認相關Job不開始執行；secondary不改Uploadcounts／Image.Status。
+全Primary Pending才BatchPending；Failed Retry後仍有其他終態圖片則BatchProcessing。全終態且有成功為Completed，全失敗為Failed，空Batch保留Pending／0counts／0progress。
+終態重試清除CompletedAt，PrimaryFailed→Pending減Processed／Failed各一；完成再加Processed／Success，所有delta與Job／Run同SQLcommit。
+Query只讀，不能以History／Queue counts重算或自行修復binding；完整規則依MOD-02 §1.15。
+
+---
+
 ## 1.8 Processing Job Monitoring
 
 Monitoring 必須可以查詢：
@@ -302,40 +317,14 @@ Monitoring Module 不執行 Step，只負責呈現 Step 狀態。
 
 ---
 
-## 1.10 Processing Log
+## 1.10 Processing Log（D-06）
 
-ProcessingLog 用於記錄 Processing History。
-
-主要資訊：
-
-```text
-Image
-Processing Step
-Status
-Duration
-Error
-Retry Count
-Timestamp
-TraceId
-```
-
-Log Status：
-
-```text
-Success
-Warning
-Failed
-```
-
-例如：
-
-```text
-ImageId      = 101
-Step         = PHASH_GENERATION
-Status       = Success
-DurationMs   = 183
-RetryCount   = 0
-```
+History來自MOD-02單一writer，Schema見 `docs/Database-Schema.md` §5。Status為Running／Success／Warning／Failed／Interrupted／Skipped，不是Job enum。
+每個實際invocation有AttemptNo／RetryOrdinal／ResumeNo；Shutdown恢復沿用槽位但新增invocation，保留舊Interrupted History。
+Step從checkpoint、RunId從Run關聯取得；Timestamp是record建立時間、StartedAt／CompletedAt是invocation時間，DurationMs未完成可NULL。
+既有Query DTO retryCount映射RetryOrdinal，Job Query retryCount才是跨Step／Run累計值。
+Active Step以checkpoint.Status為準，History的最後一筆不是唯一active source。
+Log Query不建立／更新History、不觸發Retry／Recovery、不重複MOD-01Uploadfailure事件。
 
 ---
 
@@ -373,83 +362,64 @@ Step    = PHASH_GENERATION
 
 ---
 
-## 1.12 Monitoring Events
+## 1.12 Monitoring Events（D-06）
 
-MVP 支援：
+MOD-02單一writer在commit確認後發布，MOD-09只轉送。共用schemaVersion=1、eventId GUID、occurredAt DateTimeOffset、traceId、batchId、imageId、jobId、runId；Batch事件沒有單一Job時相關id為NULL。
 
-```text
-ProcessingStarted
-ProcessingCompleted
-ProcessingFailed
-BatchProgressUpdated
-BatchCompleted
-```
-
-### ProcessingStarted
-
-```json
-{
-  "event": "ProcessingStarted",
-  "batchId": "batch-001",
-  "imageId": 102,
-  "step": "PHASH_GENERATION",
-  "timestamp": "2026-08-31T10:00:00Z"
-}
-```
-
-### ProcessingCompleted
+| Event | payload／語意 |
+|---|---|
+| ProcessingStarted | Job Claim／Active Run／首個Running Log已提交 |
+| ProcessingStepStarted | step／attemptNo／retryOrdinal／resumeNo |
+| ProcessingStepCompleted | identity＋outcome Success／Warning／Skipped＋durationMs；不是Job完成 |
+| ProcessingStepFailed | identity＋safe errorCode＋willRetry；不是必然JobFailed |
+| ProcessingCompleted | Job／Run已Completed |
+| ProcessingFailed | Job／Run已Failed、safe errorCode |
+| BatchProgressUpdated | 原aggregate欄位快照 |
+| BatchCompleted | status Completed／Failed＋aggregate；不是所有StepCompleted都發 |
 
 ```json
 {
-  "event": "ProcessingCompleted",
-  "batchId": "batch-001",
-  "imageId": 102,
-  "step": "PHASH_GENERATION",
-  "durationMs": 183,
-  "timestamp": "2026-08-31T10:00:01Z"
-}
-```
-
-### ProcessingFailed
-
-```json
-{
-  "event": "ProcessingFailed",
-  "batchId": "batch-001",
-  "imageId": 102,
-  "step": "PHASH_GENERATION",
-  "errorCode": "IMAGE_DECODE_FAILED",
+  "schemaVersion": 1,
+  "eventId": "e0f0d28d-b4cf-4cda-a3ed-594eec640001",
+  "occurredAt": "2026-10-12T10:00:01+08:00",
   "traceId": "00-abc123",
-  "timestamp": "2026-08-31T10:00:01Z"
+  "batchId": "e0f0d28d-b4cf-4cda-a3ed-594eec640002",
+  "imageId": 102,
+  "jobId": 1001,
+  "runId": 2001,
+  "event": "ProcessingStepCompleted",
+  "step": "PHASH_GENERATION",
+  "attemptNo": 2,
+  "retryOrdinal": 0,
+  "resumeNo": 1,
+  "outcome": "Success",
+  "durationMs": 183
 }
 ```
 
-### BatchProgressUpdated
-
 ```json
 {
-  "event": "BatchProgressUpdated",
-  "batchId": "batch-001",
-  "totalCount": 100,
-  "processedCount": 80,
-  "successCount": 78,
-  "failedCount": 2,
-  "progressPercentage": 80
-}
-```
-
-### BatchCompleted
-
-```json
-{
+  "schemaVersion": 1,
+  "eventId": "e0f0d28d-b4cf-4cda-a3ed-594eec640003",
+  "occurredAt": "2026-10-12T10:00:02+08:00",
+  "traceId": "00-abc123",
+  "batchId": "e0f0d28d-b4cf-4cda-a3ed-594eec640002",
+  "imageId": null,
+  "jobId": null,
+  "runId": null,
   "event": "BatchCompleted",
-  "batchId": "batch-001",
+  "status": "Completed",
   "totalCount": 100,
+  "processedCount": 100,
   "successCount": 98,
   "failedCount": 2,
   "progressPercentage": 100
 }
 ```
+
+Geo耗盡最後Failed invocation與fallback Warning StepCompleted分開，不能因此發Job ProcessingFailed。
+ShutdownInterrupted不發JobFailed；T5後若Batch又進入新的終態可再發BatchCompleted，Client以當前REST為準。
+best-effort通知不保證必達／恰好一次／重啟重送，沒有Outbox／Broker／持久event表。failure只安全SystemLog，不回滾或重跑已提交分析。
 
 ---
 
@@ -525,27 +495,11 @@ Vue Dashboard
 
 ---
 
-## 1.15 Event Ordering
+## 1.15 Event Ordering 與重新同步
 
-Event 應盡可能依照：
-
-```text
-CreatedAt
-+
-Sequence
-```
-
-維持合理順序。
-
-但 Client **不得假設 Network Event 一定按照發送順序抵達**。
-
-因此 Dashboard 必須可以透過：
-
-```text
-GET Batch Status
-```
-
-重新取得目前正確狀態。
+事件可遺失／重複／延遲／亂序。Client可用eventId去重，但不把occurredAt當全域順序，不假設存在未核准Sequence欄位。
+REST持久化Job／checkpoint／Batch是當前狀態來源，SignalR只通知變化。斷線／亂序／無法判斷新舊時重新Query，不靠event delta恢復counts。
+事件delivery failure不會造成分析重跑；batch snapshot沒有逐通知必達保證。
 
 ---
 
@@ -712,46 +666,12 @@ pageSize <= 500
 
 ---
 
-## 1.21 Application Interface
+## 1.21 Application Interface 與映射
 
-主要介面：
-
-```csharp
-public interface IMonitoringService
-{
-    Task<BatchStatusResult> GetBatchStatusAsync(
-        Guid batchId,
-        CancellationToken cancellationToken);
-
-    Task<IReadOnlyCollection<ProcessingLogResult>>
-        GetProcessingLogsAsync(
-            long imageId,
-            CancellationToken cancellationToken);
-}
-```
-
-Event Publisher：
-
-```csharp
-public interface IMonitoringEventPublisher
-{
-    Task PublishProcessingStartedAsync(
-        ProcessingEvent eventData,
-        CancellationToken cancellationToken);
-
-    Task PublishProcessingCompletedAsync(
-        ProcessingEvent eventData,
-        CancellationToken cancellationToken);
-
-    Task PublishProcessingFailedAsync(
-        ProcessingEvent eventData,
-        CancellationToken cancellationToken);
-
-    Task PublishBatchProgressAsync(
-        BatchProgressEvent eventData,
-        CancellationToken cancellationToken);
-}
-```
+BatchStatus query保留MOD-01既有contract。History query需要帶入page／pageSize及可選step、status、jobId、runId，回傳含items與page／pageSize／totalCount的Query DTO，完整規則見§3.4～§3.5。
+不得沿用舊無pagination參數的GetProcessingLogsAsync並宣稱符合本契約；具體Application type／method signatures於Task前review確認，不引用EF Entity／SQL／SignalR於Application。
+Event Publisher能表達§1.12全部事件，MOD-02發布、MOD-09轉送；不以舊四方法示意遺漏StepStarted／StepFailed／BatchCompleted。
+MOD-02 GET /api/v1/processing/jobs/{id}與本模組GET /api/v1/jobs/{id}共用同一持久化Job source，是不同既有Query boundary；各自保留已列payload及PROCESSING_NOT_FOUND／JOB_NOT_FOUND，不宣稱同一API或新增副作用。
 
 ---
 
@@ -788,7 +708,7 @@ Exception
    ↓
 Global Exception Handler
    ↓
-Serilog
+ILogger<T>（provider integration 另行決策）
    ↓
 TraceId
    ↓
@@ -841,6 +761,23 @@ Agent 不得自行選擇一個規格並修改其他規格來配合。
 
 ---
 
+## 跨模組修訂與 MOD-09 獨立審閱
+
+MOD-02 更新 Job／Image／Batch，MOD-09 只讀持久化 aggregate、History 與 Application Event，不接管 Claim／Retry／Recovery，也不建立平行 Batch API。
+沿用 MOD-01 TASK-11 的 endpoint、Decimal、TotalCount=0 → 0 與 0–100 clamp；既有 Upload System Log 由原 producer 擁有，不重複發送。
+canonical Log schema 見共用文件；事件抵達順序不保證，REST DB 是重新同步來源。
+
+- M09-01／Major（文件契約已解除）：D-06核准page1／pageSize50、1～500、server pagination、Timestamp+Id排序與一致性讀取；§1.21／§3.4～§3.5已同步。未有runtime證據。
+- M09-02／Major（文件契約已解除）：§1.12已統一StepStarted／Completed／Failed與Job／Batch事件，Writer commit後通知，Warning不發JobFailed。
+- M09-03／Major（資料來源契約已解除）：active state讀checkpoint；History具Running與terminal Status、每invocation identity，不靠最後Log猜Job狀態。
+- M09-04／Major（文件矛盾已解除）：已核准best-effort事件不含全域Sequence，不保證排序／送達；REST resync為狀態來源，§1.15已改正。
+- M09-05／Risk：§1.17 Channel metrics 需定義 accepted/dequeued/active/completed、取消、重複通知與重啟歸零，不能把 Queue notification counts 當 DB Job counts；Readiness／部署先核對舊Instance已停止及Worker可消費；Queue counter定義仍待U-02，不把通知數當DB Job數。
+- M09-06／Major（來源／boundary歧義已解除）：§1.21明列同DBsource、不同既有Query boundary與各自not-found code／payload，沒有合併route。
+
+新增驗收：log mapping、穩定分頁、retry attempt 不重複寫入、Step completion 不誤發 Job completion、out-of-order event 後 REST resync、Queue counter cancellation／duplicate、partial Batch failure；待相關契約定案後才可判 PASS。
+
+---
+
 # 2. 資料表
 
 Monitoring Module 主要使用既有 Processing 資料：
@@ -853,6 +790,15 @@ ProcessingLogs
 ```
 
 Monitoring Module 主要負責查詢與呈現這些資料，不應為了產生基本 Monitoring 功能而重複建立 Processing 狀態資料。
+
+---
+
+## 共用 Schema 與交接基線
+
+physical mapping 以 `docs/Database-Schema.md` 已確認部分為共同依據；尚未定案的欄位、索引與關係明列為待決策，不假設不存在的原始 Database-Schema.md 已提供答案。
+沿用 MOD-01 Image.Id BIGINT、BatchId uniqueidentifier、DateTimeOffset／datetimeoffset(7) 與 Unicode mapping。
+SQL Server timestamp／rowversion 不是日期時間；日期不得以 TIMESTAMP mapping 實作。
+MOD-01 feature 尚未合併；TASK-11／12 最新驗收維持待確認，不能把後續模組未完成判作 MOD-01 Backend 缺陷。
 
 ---
 
@@ -917,25 +863,13 @@ ErrorMessage
 
 ---
 
-## 2.4 ProcessingLogs
+## 2.4 ProcessingLogs 與 execution Query
 
-用途：
-
-> 儲存圖片 Processing History。
-
-主要欄位：
-
-```text
-ImageId
-ProcessingStep
-Status
-DurationMs
-ErrorCode
-ErrorMessage
-RetryCount
-Timestamp
-TraceId
-```
+正式設計見 `docs/Database-Schema.md` §3～§6：Run、checkpoint、Log與Primary binding由MOD-02寫入。
+Log.Id為BIGINT identity；Step、RunId透過checkpoint關聯，沒有另一個physical Step／Log.RetryCount欄位。
+DTO step映射checkpoint.Step，timestamp映射Log.Timestamp，retryCount映射Log.RetryOrdinal；JobQueryretryCount仍映射ProcessingJobs.RetryCount。
+Batch／Workflow由已核對Job／Image／binding關聯取得，Query不補寫缺binding／Run、也不判斷舊Instance可否回收。
+實際DB未核對；這是規格與Schema設計，不宣稱Migration完成。
 
 ---
 
@@ -973,7 +907,7 @@ INDEX(
 )
 ```
 
-實際 Schema、Index 名稱與資料型別以 **Database-Schema.md** 為唯一依據。
+實際 mapping 以 `docs/Database-Schema.md` 的已確認部分為依據；本節索引為建議，未決索引不得直接加入 Migration。
 
 ---
 
@@ -1050,43 +984,47 @@ status
 
 ---
 
-## 3.4 Get Processing Logs
+## 3.4 Get Processing Logs（D-06）
 
 ```http
 GET /api/v1/images/{imageId}/processing-logs
 ```
 
-用途：
+| Parameter | Default／限制 |
+|---|---|
+| page | 1，整數>=1 |
+| pageSize | 50，整數1～500 |
+| step | optional，核准Step identifier（Registry仍待D-14） |
+| status | optional，Running／Success／Warning／Failed／Interrupted／Skipped |
+| jobId／runId | optional，正BIGINT |
 
-> 查詢指定圖片完整 Processing History。
-
-Response：
+sort = Timestamp DESC,Id DESC；同一次Query的totalCount與items在一致性讀取範圍取得，DB projection／server-side pagination，不全載入後切頁。
+跨不同頁請求不保證同一snapshot；新增History會影響offset，長時間穩定串流/cursor不是本Pagination保證。
+既有items欄位保留imageId／step／status／durationMs／retryCount／timestamp；durationMs可NULL，retryCount是Step RetryOrdinal，不是Job累計值。
 
 ```json
 {
   "success": true,
-  "data": [
-    {
-      "imageId": 102,
-      "step": "EXIF_PARSING",
-      "status": "Success",
-      "durationMs": 25,
-      "retryCount": 0,
-      "timestamp": "2026-08-31T10:00:01Z"
-    },
-    {
-      "imageId": 102,
-      "step": "PHASH_GENERATION",
-      "status": "Success",
-      "durationMs": 183,
-      "retryCount": 0,
-      "timestamp": "2026-08-31T10:00:02Z"
-    }
-  ]
+  "data": {
+    "items": [
+      {
+        "imageId": 102,
+        "step": "PHASH_GENERATION",
+        "status": "Success",
+        "durationMs": 183,
+        "retryCount": 0,
+        "timestamp": "2026-10-12T10:00:01+08:00"
+      }
+    ],
+    "page": 1,
+    "pageSize": 50,
+    "totalCount": 1
+  }
 }
 ```
 
----
+Image存在但無History為200／empty items／totalCount0；頁超過現有資料為empty items／保留實際totalCount。不存在Image維持404／IMAGE_NOT_FOUND。
+非法pagination／enum／Id filter為400／INVALID_MONITORING_QUERY，共用error.traceId；Query不觸發Step／Retry。
 
 ## 3.5 Get Batch Processing Logs
 
@@ -1094,23 +1032,18 @@ Response：
 GET /api/v1/batches/{batchId}/processing-logs
 ```
 
-用途：
+同§3.4參數、response、sort與限制，以Job.BatchId／一致Image關聯篩選；不得以join重複同Log row。
+不存在Batch維持404／BATCH_NOT_FOUND；存在無History為200空items。
 
-> 查詢指定 Batch 的 Processing Logs。
-
-Query Parameters：
-
-```text
-page
-pageSize
-status
-step
-```
-
-例如：
-
-```text
-?page=1&pageSize=100&status=Failed&step=PHASH_GENERATION
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_MONITORING_QUERY",
+    "message": "The monitoring query is invalid.",
+    "traceId": "00-abc123"
+  }
+}
 ```
 
 ---
@@ -1228,6 +1161,7 @@ Database Error Details
 | JOB_NOT_FOUND | 404 | 找不到 Job |
 | LOG_NOT_FOUND | 404 | 找不到 Processing Log |
 | MONITORING_UNAVAILABLE | 503 | Monitoring 暫時不可用 |
+| INVALID_MONITORING_QUERY | 400 | pagination／enum／filter不合法 |
 | INTERNAL_ERROR | 500 | 系統內部錯誤 |
 
 ---
@@ -1551,3 +1485,10 @@ Grafana
 > **MVP 不要求導入完整 Observability Stack。**
 
 Future extension 不得破壞現有 Monitoring API、Event Contract 與 Module Boundary。
+
+# 最終核准契約 — F-08（最小診斷與runtime metrics）
+
+GET /api/v1/processing/batches/{batchId}/prerequisites只讀，MOD01原Query不改。正常blocked回200 data={batchId,checkedAt,ready:false,reasons,resolutionHint,count,truncated}；Batch不存在404/BATCH_NOT_FOUND；provider無法核對503/PROCESSING_PREREQUISITE_UNAVAILABLE，不能假ready。ready依完整集合核對，不以只取100個理由當確認全部；reasons安全分類BINDING_MISSING/BINDING_AMBIGUOUS/RELATIONSHIP_MISMATCH/COLLECTION_UNCONFIRMED/CONTEXT_MISSING/SIDE_EFFECT_UNCONFIRMED/AGGREGATE_INCONSISTENT，最多呈現100筆並count/truncated，identifier僅Batch/Image/Job且不揭內部路徑/SQL/證據。排序reasonCode/ImageId/JobId穩定，checkedAt表示本次核對時間，不是已持久阻擋狀態。
+Query不選主/修復/排程/清理；補證據或經另授權處理矛盾後MOD02重驗解除，不提供unblock寫API、不加MOD01Status/診斷持久表。只阻擋該Batch Primary執行；其他已確認Batch正常。CreateJob與管理寫API保留驗證次序，duplicate/mismatch仍409，交接阻擋503與安全envelope，拒絕零新增/排程/aggregate副作用。
+runtime按processInstanceId區分、重啟歸零、best-effort而非SQL Job truth：queuedNotifications=已成功enqueue未dequeue通知（重複也算通知）；activeInvocations=已commit Running至terminal/shutdown結束；stepRetryInvocationsTotal=首次開始新retry邏輯槽位，不含resume/保存retry；shutdownResumesTotal=恢复invocation；droppedDuplicateNotificationsTotal=DB核對無執行資格的重複通知。enqueue/dequeue失敗不更新counter，counter採thread-safe，不拿History筆數當Job數。依賴Waiting沒有Running不計activeInvocations。DB counts依ProcessingJob status另查，REST authority/Historywriter不變。
+SignalR/event best-effort、commit後通知，無Outbox/事件必達/持久metrics/dashboard/跨重啟counter連續性；health/readiness不是舊process已停證据。具體handler/SQL/metrics驗收尚未實作，不稱PASS。

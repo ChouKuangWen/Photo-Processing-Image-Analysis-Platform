@@ -1,5 +1,11 @@
 # Similarity Module Specification
 
+> **規格修訂草稿（2026-10-12）**：以 develop `8ff1dd983af2ffa68dfc93893f9cca61fadb2c90` 為基準。
+> MOD-01 feature `a1bb29e1d7cf704a202adbe1c14741b6441575be` 僅為交接證據，未合併進 develop。
+> 已核准與待決策內容分開記錄於 [規格審閱與決策紀錄](../reviews/Specification-Revision-Review.md)。
+> F-01～F-08已核准並同步至最終契約章；同題舊待決文字由最終章取代。引擎/精確版本N-01與實作驗收仍未完成；不是TASK、實作或PASS授權。
+
+
 **文件名稱：** Similarity Module Specification  
 **模組編號：** MOD-06  
 **模組名稱：** Similarity Module  
@@ -441,70 +447,8 @@ SimilarityOptions
 
 # 1.11 Candidate Search
 
-Similarity Module 不應對所有圖片直接執行完整：
-
-```text
-O(N²)
-```
-
-比較。
-
-例如：
-
-```text
-10,000 Images
-```
-
-完整兩兩比較約需要：
-
-```text
-10,000 × 9,999 / 2
-```
-
-次比較。
-
-因此 MVP 必須先建立：
-
-> **Candidate Filtering**
-
-再進行 Hamming Distance 比較。
-
-Candidate 可以從：
-
-```text
-Images with available pHash
-+
-Compatible image characteristics
-```
-
-中產生。
-
-但目前規格沒有進一步固定：
-
-> **Compatible image characteristics 的完整條件**
-
-因此 Agent 不得自行發明複雜 Candidate Rule。
-
-若 Implementation 需要更具體 Candidate Strategy：
-
-```text
-Stop
- ↓
-Report Missing Rule
- ↓
-Propose Candidate Strategy
- ↓
-Wait for Approval
-```
-
-Future 可以評估：
-
-- Hash Bucketing
-- LSH
-- Approximate Nearest Neighbor
-- Vector Search
-
-以上不屬於 MVP。
+MVP使用管理者確認的單資料集合完整snapshot，最多1000張/50000threshold edges/比較併發2，可設定且未效能驗證。合法集合可跨Batch；不得跨集合或默認有technical tenant隔離。1000以上拒絕，不截斷/NoMatch/Completed。
+同版本pHash完整後才可發布single-link正式結果。上限內最多499500pair計算，只保存>=0.85 edges，未計算pair未知；低threshold query可唯讀有界計算，不寫結果。候選hash未齊的執行調度為N-02未決，不能直接占Worker無限等待或發partial snapshot。細節依最終F-03章。
 
 ---
 
@@ -994,7 +938,48 @@ Agent 不得自行補規格。
 
 ---
 
+## 與 MOD-02 的已核准執行契約
+
+- MVP 單 Instance、多 Worker，MOD-02 以 SQL Server 原子 Claim 取得 Job 執行權；本模組不建立 Queue、Worker 或平行重試排程器。
+- 每Run的每個transient Step由MOD-02管理四個邏輯槽位0～3，重試等待1／2／4秒；Shutdown Resume沿用槽位而另記invocation，本模組不疊加retry loop。
+- host shutdown cancellation 向上傳播、不算 Retry；中斷由 MOD-02 處理，不能偽裝成 module failure 或 fallback。已提交成功結果需核對可重用性，不重做副作用。
+- Job Status、Step Result、Log Status 不混用；失敗由 MOD-02 協調持久化 Job transition，本模組不直接改其 enum。
+- D-05／D-06已核准MOD-02單一History writer、Run／checkpoint／invocation、提交後best-effort事件；Step從checkpoint映射、Timestamp為Log建立時間，schema見共用文件§3～§6。子模組回報Outcome，不重複寫History。
+- 保留每次 attempt History，重要 operation 安全保留 JobId／ImageId／TraceId；沿用 ILogger<T>，不輸出 raw exception／SQL／path／secrets，不重複 MOD-01 failure event。
+- 本模組的新增契約缺口與決策選項見 `docs/reviews/Specification-Revision-Review.md`；未決事項不能以一般實作細節自行補足。
+
+
+### MOD-06 獨立審閱缺口（未核准）
+
+- M06-01／Major：§1.6～§1.9 未固定 pHash 位元長度／preprocessing／DC coefficient／bit ordering／serialization／algorithm version。64-bit 是算例，不視為已核准算法。重用結果必須兼容同一版本，見 D-10。
+- M06-02／Major：§1.11 已承認 Candidate Filter 條件未定；filter 不得無證據排除合規相似圖，候選範圍與晚到 image 補比對需決策。
+- M06-03／Major：§1.12 A~B／B~C 不代表 A~C；single-link與versioned membership已核准；最終章定義group不代表全部pair與DB原子snapshot發布。
+- M06-04／Major：§2.5 每 member 單一 SimilarityScore 未定相對對象，不能代表全部 pair。§3.2 允許 lower custom threshold，若只保存 default threshold group 則可能漏掉合法候選；read-only query 不能藉此重建群組。pair/reference schema 與 query strategy 待 D-10。
+- M06-05／Major：§2.3 與 MOD-07 共用 ImageAnalysis，pHash row 存在不代表 Quality 完成；部分欄位／完成版本／並行更新不能互相覆蓋，見共用 Schema 待決策。
+
+SimilarityScore 的公式保持不變，HammingDistance／HashBitLength 必須使用非整數除法；閾值 0～1 與 >= 邊界不變。
+新增驗收：閾值 0／1、不同 hash version 不比較、A~B~C 非傳遞、低於 default 的 Query、晚到候選、多 Worker group merge、pHash／Quality 同 Image 並行寫入；需要先核准 D-10。
+
+---
+
+### D-05～D-07 同步限制
+
+只有binding／版本／Context可確認且T1／T2已原子提交Running Log後才開始本模組。結果／History保存重試不重做模組操作，也不消耗business retry budget。
+程序在T3前中斷時memory可能遺失；只讀計算需可重現Input／RuleVersion才能安全重算；已有SQL／Group／Storage副作用先核對，不因未保存checkpoint盲目重做。
+Unknown副作用／Context先阻擋。PrimaryJob才更新Image／BatchStatus，secondary不改Uploadaggregate。F-01～F-08的結果/版本/receipt已同步最終章；Analysis/Full尚有N-01/N-02，實作與驗收未完成。
+
+---
+
 # 2. 資料表
+
+## 共用 Schema 與交接基線
+
+physical mapping 以 `docs/Database-Schema.md` 已確認部分為共同依據；尚未定案的欄位、索引與關係明列為待決策，不假設不存在的原始 Database-Schema.md 已提供答案。
+沿用 MOD-01 Image.Id BIGINT、BatchId uniqueidentifier、DateTimeOffset／datetimeoffset(7) 與 Unicode mapping。
+SQL Server timestamp／rowversion 不是日期時間；日期不得以 TIMESTAMP mapping 實作。
+MOD-01 feature 尚未合併；TASK-11／12 最新驗收維持待確認，不能把後續模組未完成判作 MOD-01 Backend 缺陷。
+
+---
 
 ## 2.1 Database Boundary
 
@@ -1997,3 +1982,39 @@ Wait for Approval
 ```
 
 不得自行擴充 Architecture 或 Business Rule。
+
+# 最終核准契約 — F-03／F-04（文件審核版）
+
+## 部署、候選、發布與查詢
+
+每部署/DB/Storage僅管理者確認的單集合，非技術隔離；不支持多使用者／租戶，不新增Auth。候選可跨Batch，不能將Batch當owner/tenant或混入其他資料集合。上限是整個目標集合1000張，不藉缺hash或偷偷截斷繞過；同snapshot/Profile必須完整，缺hash/混版本NotReady。
+暫定可設定限制：1000圖片、50000 edges、比較併發2，未效能驗證。只保存>=0.85 edges，canonical pair ImageLo<ImageHi、兩端ContentVersion/ProfileVersion/SnapshotId。single-link是達threshold edges的connected components；同群不代表每pair近似，更不是可刪證據。membership/version持久化，歷史snapshot不默改。
+候選/edge完整核對後T3原子發布正式snapshot；超限409/SIMILARITY_CAPACITY_EXCEEDED，Permanent Step/Run/Job Failed，不Retry、不NoMatch、不Completed、不發布部分正式edges/membership/Recommendation。可以保留獨立成功hash與非正式staging；舊成功snapshot保留但明確版本與Stale/不是本次成功。容量失敗不能因調高配置而自動取得人工Retry資格；重新執行管理語意延後，不自行清理資料。
+低threshold Query只讀既有同版本hash，實際完整計算最多999pair後分頁；threshold0..1，page>=1預設1，pageSize1..100預設50，score DESC/ImageId ASC，同request items/count一致。返回snapshotId/profileVersion/coverage/totalMatched；只有完整比較成功才coverage=Complete。跨page不承諾snapshot穩定。不補hash、不解碼、不寫Job/History/Pair/Group。
+2秒可設定Query deadline包含DB讀與計算；共享比較gate2、無無界等待，資源滿503/SIMILARITY_QUERY_BUSY，逾時503/SIMILARITY_QUERY_TIMEOUT，缺hash/混版本409/SIMILARITY_NOT_READY，容量409。取消只結束read，deadline必須傳入DB/計算。單張有有效hash則NoMatch；無hash是NotReady。沒有已存pair可由此次有界hash計算得分，但未計算前不承諾已有可讀score。
+
+## phash-dct64-v1 完整数值定義
+
+本profile是待實作與驗收的規格，不是已證實bit一致或準確率能力。
+解碼器／ICC引擎及精確版本目前沒有已核准baseline：feature .csproj僅EF/Logging，MOD-07列ImageSharp/OpenCvSharp候選非決策。必須Architecture核准EngineId/PackageVersion、native dependency version（若有）、RGBA輸出約定與ICC版本後才可凍結ProfileManifest；不能用latest/default填值或自行引入package。這是剩餘必要引擎決策N-01，阻擋Analysis/Full profile freeze，不阻擋核心規劃。
+profile適用已核准JPEG/PNG；異常/不支持格式Permanent failure，不能產生Completed hash。decode輸出unpremultiplied RGBA8，沒有ICC假定sRGB；合法embedded ICC轉sRGB，relative colorimetric、black-point compensation off；非法ICC永久失敗。色彩引擎必須記manifest並用golden檢查，不以平台default代替。合法Orientation1..8對decoded pixels套一次（含mirror），沒有則identity、非法identity/Warning；原檔不變。
+白底混合每channel C'=floor((a*C+(255-a)*255+127)/255)，a與C皆0..255。gray Y=floor((299R'+587G'+114B'+500)/1000)，範圍0..255。
+resize32x32：每destination cell对应source面積區間[i*W/32,(i+1)*W/32)×[j*H/32,(j+1)*H/32)；把邊界以32倍整數座標表示，權重為與source pixel cell相交的整數面積，sum(Y*weight)/sum(weight)做half away rounding。source小於32同樣面積重採樣，不用平台interpolation。alpha混合/gray先做，再resize。
+DCT-II basis B[u,x]=roundAway(65536*alpha(u)*cos(pi*(2x+1)*u/64))，alpha(0)=sqrt(1/32)、其餘sqrt(2/32)。由單一reference流程高精度離線生成32x32固定表，table/checksum隨Manifest凍結；不得每平台動態cos。C[u,v]=sum_y(sum_x(Y[x,y]*B[u,x])*B[v,y])，不除Q32（全係數同scale），x/y固定升序、checked Int64；溢出是失敗不是wrap。固定表數值/checksum與golden bytes屬後續實作產物，未產生前不能聲稱profile已發布。
+zigzag按s=u+v由0..62；s偶數u降序、奇數u升序，在合法0..31範圍列出(u,v)，跳過(0,0)，取前64。排序係數d[0..63]，以2*C>d[31]+d[32]判bit1，等號bit0，不需float median。第0係數為byte0的MSB；8byte big-endian／16字元lowercase hex。roundAway對負數對稱，精確tie遠離0；gray/resize為非負，使用整数half-up等价。Score=1-popcount(xor)/64，內部精確分數，不先round再threshold；threshold0.85保持。
+
+## Golden與holdout驗收（尚未執行）
+
+golden manifest每fixture保存合法來源/用途、原檔SHA256、format/dimensions/EXIF/ICC、Engine/Profile/table版本、Orientation後RGBA checksum、gray32 checksum、64係數/8byte預期hash/error分類。fixture類別必含：黑/白/中灰平面、checkerboard、gradient、單像素與非整倍數尺寸、RGBA alpha0/128/255、Orientation1..8同視圖等價、missing/invalid EXIF、sRGB/missing/不同合法ICC/非法ICC、baseline/progressive/grayscale JPEG與PNG、截斷檔。視圖等價只能以受控無損fixture指定，JPEG重新編碼不強制hash全同。
+expected values由凍結reference人工檢視並保存，不以被測實作當場生成自己的expected。reference/測試fixture檔案未在本輪建立；只有數學可推的預期在設計給出：bit數64、相等median bit0、同原byte距離0、不同Profile拒絕。golden實際bytes/output/checksum與支援OS/runtime matrix需後續TASK完成並驗收，禁止假PASS。
+golden與matrix須100%bit一致、並發/重啟一致。independent holdout按原始圖來源分組，變體不跨校準/holdout；初步300圖與positive/hardnegative各100不視充分證據。0.85處observed precision>=95%、recall>=90%、FPR<=5%；95% Wilson precision下界>=90%、recall下界>=85%、FPR上界<=10%，報告樣本/分類/區間及bootstrap。未達須回報重新決策或補獨立樣本，不自行降門檻；調profile須新version/未使用holdout。
+性能後續量測1000/499500pair/50000edges/Query999/併發2，測deadline/取消/記憶體/DBvolume/無部分發布。只承諾待驗證要求，不宣稱已效能PASS；本輪不建實作TASK。
+
+## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
+
+正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。
+這是規格缺口而非已證實runtime deadlock。保持Analysis/Full完整實作准入BLOCKED，核心TASK規劃與Naming不因本缺口阻擋。推薦下一次針對N-02核准把VISUAL候選等待納入既有T2-W（讓出Worker、持久deadline、版本核對、無Running/不消耗Retry、ready後原子開始）；VISUAL等待budget與逾時政策需集中決定，不能擅自挪用Recommendation120秒或改Step順序。本輪不實作、不建立TASK、不改已核准checkpoint wait範圍。
+
+### N-01引擎決策的完整資料要求
+
+Architecture決策需一次確認Decoder EngineId/精確PackageVersion、ICC engine/version、native version/OS變體（若有）、package來源/鎖定及支援matrix（至少Linux x64與Windows x64、.NET10相同精確runtime patch，版本寫入manifest）。跨平台bit一致是待驗收要求，不能把只跑Linux說成跨平台PASS。推薦優先單一跨平台managed decoder/ICC provider以減少不同native實作，但ImageSharp與OpenCvSharp都只候選；本輪無已核准package/版本，不虛構pin。若無法達門檻須回報重新決策，不更換引擎/降threshold/改rounding默默通過。
