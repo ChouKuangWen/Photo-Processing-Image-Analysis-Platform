@@ -1,5 +1,11 @@
 # 10. Export Module Specification
 
+> **規格修訂草稿（2026-10-12）**：以 develop `8ff1dd983af2ffa68dfc93893f9cca61fadb2c90` 為基準。
+> MOD-01 feature `a1bb29e1d7cf704a202adbe1c14741b6441575be` 僅為交接證據，未合併進 develop。
+> 已核准與待決策內容分開記錄於 [規格審閱與決策紀錄](../reviews/Specification-Revision-Review.md)。
+> 本文件修訂不代表實作、驗收通過或正式 TASK 已核准；有關待決策章節不得自行補成需求。
+
+
 **文件名稱：** Export Module Specification  
 **模組編號：** MOD-10  
 **模組名稱：** Export Module  
@@ -169,7 +175,7 @@ public sealed class ImageExportDto
     public string OriginalFileName { get; init; } = string.Empty;
     public string? NewFileName { get; init; }
 
-    public DateTime? TakenAt { get; init; }
+    public DateTimeOffset? TakenAt { get; init; }
     public string? CameraModel { get; init; }
     public int? Iso { get; init; }
     public string? ShutterSpeed { get; init; }
@@ -188,7 +194,7 @@ public sealed class ImageExportDto
     public decimal? MetadataScore { get; init; }
 
     public string Status { get; init; } = string.Empty;
-    public DateTime CreatedAt { get; init; }
+    public DateTimeOffset CreatedAt { get; init; }
 }
 ```
 
@@ -240,7 +246,7 @@ Export Service 不負責：
 ICsvGenerator
 ```
 
-介面：
+既有 buffered 介面示意（不能滿足 §1.11 streaming；正式 signature 待 D-13，未核准替代前不得宣稱本介面具備 streaming）：
 
 ```csharp
 public interface ICsvGenerator
@@ -820,7 +826,32 @@ Wait for Approval
 
 ---
 
+## MOD-10 獨立審閱與共用契約修訂
+
+Export 只讀既有資料，不加入 Processing Pipeline、不 Claim Job、不自動補跑 analysis、不新增 ProcessingLog／ExportLog／AuditLog。
+已有 TakenAt／CreatedAt 與 From／To 的 DTO 時間統一用 DateTimeOffset，避免遺失 MOD-01 offset；CSV 序列化與沒有 offset 的 query input 政策仍待 D-13。
+錯誤 traceId 位於 error.traceId（SYS／MOD-01 共用 envelope），成功下載仍為 CSV，非 JSON success envelope。
+
+- M10-01／Major：§1.7 byte[] Generate(IEnumerable) 必須保存整個輸出，不能满足 §1.11／§4.5 bounded streaming。保留 legacy sample 作待替換介面；streaming signature、ownership／cancellation 與 response 已開始後 error 策略待 D-13，不能宣稱 batch query 就消除全輸出 buffer。
+- M10-02／Major：§1.8 要固定 header order 但只給例子，§1.4 宣稱匯出 Duplicate／Similarity 卻未列結果欄位。正式欄位、來源、排序、decimal/time culture、Status 指向 Image／Job 與日期欄位／inclusive bounds 待 D-13。
+- M10-03／Risk：OriginalFileName／LocationName 可為 =、+、-、@ 開頭；CSV comma/quote/newline escaping 不等於 Excel formula 防護。neutralize／拒絕／保留原值政策及影響待 D-13，不擅自改資料內容。
+- M10-04／Major：§1.12／§3.5 多表 Join 與分頁在 concurrent processing 中可能重複／遺漏 Image 或輸出混合版本；row cardinality、consistent snapshot／best-effort 策略與 sort key 待 D-13，不得在匯出時改 DB 修復。
+- M10-05／Minor：§4.3 Empty Data 的 Assert.NotEmpty 不能證明只有 BOM+Header，escape example 也未涵蓋雙引號／換行。修訂下面的驗收說明，但不修改測試原始碼。
+
+新增驗收要求：解析 BOM+Header+零 row 的 exact 結果與欄位順序；comma／quote／CRLF；culture／offset；公式開頭文字；duplicate joins／穩定分頁；memory 隨輸出量保持 bounded；download cancellation 資源釋放與 response 已開始後 failure。待 D-13 定案前，不把 legacy byte[] 範例當成 streaming readiness 證據。
+
+---
+
 # 2. 資料表
+
+## 共用 Schema 與交接基線
+
+physical mapping 以 `docs/Database-Schema.md` 已確認部分為共同依據；尚未定案的欄位、索引與關係明列為待決策，不假設不存在的原始 Database-Schema.md 已提供答案。
+沿用 MOD-01 Image.Id BIGINT、BatchId uniqueidentifier、DateTimeOffset／datetimeoffset(7) 與 Unicode mapping。
+SQL Server timestamp／rowversion 不是日期時間；日期不得以 TIMESTAMP mapping 實作。
+MOD-01 feature 尚未合併；TASK-11／12 最新驗收維持待確認，不能把後續模組未完成判作 MOD-01 Backend 缺陷。
+
+---
 
 ## 2.1 資料表原則
 
@@ -893,7 +924,7 @@ Export 不擁有上述資料表的 Domain Ownership。
 實際 Schema 以：
 
 ```text
-Database-Schema.md
+docs/Database-Schema.md
 ```
 
 為準。
@@ -988,9 +1019,9 @@ public sealed class ExportImagesRequest
 
     public string? Status { get; init; }
 
-    public DateTime? From { get; init; }
+    public DateTimeOffset? From { get; init; }
 
-    public DateTime? To { get; init; }
+    public DateTimeOffset? To { get; init; }
 }
 ```
 
@@ -1139,9 +1170,9 @@ API 使用統一錯誤格式：
   "success": false,
   "error": {
     "code": "INVALID_EXPORT_FILTER",
-    "message": "The export filter is invalid."
-  },
-  "traceId": "abc123"
+    "message": "The export filter is invalid.",
+    "traceId": "00-abc123"
+  }
 }
 ```
 
@@ -1733,3 +1764,12 @@ Excel / Data Analysis
 Export Module 最終定位：
 
 > **將系統內部已存在的影像處理與分析結果，以穩定、安全且可供使用者使用的 CSV 報表形式輸出。**
+
+## 本批跨模組契約同步
+
+Metadata的UploadCreatedAt fallback不代表真實拍攝時間；匯出需要來源標記，確切headers／來源欄位待D-13。Similarity匯出只使用已計算有效pair；不得以group關係補score。
+
+# 最終審核範圍 — D-13 延後限制
+
+延後的是新增Export能力與本輪實作准入，不刪除前文既有Export規格，不將功能視為取消。既有規格/DTO/API保留；新增TimeSource列、完整CSV profile/snapshot/測試與實作授權需後續Export審查。F-01～F-08沒有使MOD-10通過完整實作准入；MOD-10維持DEFERRED / NOT READY FOR IMPLEMENTATION。
+本輪只同步Metadata來源（UploadCreatedAt不是實拍）、current version/pair真實score、不寫Job/History/Audit。Export與進階Monitoring不阻擋MOD02核心TASK範圍。原CSV streaming/列/filter與formula風險保持後續驗收要求，不宣稱現有程式可用或測試PASS。

@@ -1,5 +1,11 @@
 # Quality Module Specification
 
+> **規格修訂草稿（2026-10-12）**：以 develop `8ff1dd983af2ffa68dfc93893f9cca61fadb2c90` 為基準。
+> MOD-01 feature `a1bb29e1d7cf704a202adbe1c14741b6441575be` 僅為交接證據，未合併進 develop。
+> 已核准與待決策內容分開記錄於 [規格審閱與決策紀錄](../reviews/Specification-Revision-Review.md)。
+> F-01～F-08已核准並同步至最終契約章；同題舊待決文字由最終章取代。引擎/精確版本N-01與實作驗收仍未完成；不是TASK、實作或PASS授權。
+
+
 **文件名稱：** Quality Module Specification  
 **模組編號：** MOD-07  
 **模組名稱：** Quality Analysis Module  
@@ -352,7 +358,7 @@ Compression = 90
 + 70 × 0.15
 + 100 × 0.10
 + 90 × 0.20
-= 86.5
+= 85.5
 ```
 
 ---
@@ -363,10 +369,10 @@ Quality Grade 根據 Quality Score 產生：
 
 | Score | Grade |
 |---:|---|
-| 0–49 | Poor |
-| 50–69 | Fair |
-| 70–84 | Good |
-| 85–100 | Excellent |
+| [0,50) | Poor |
+| [50,70) | Fair |
+| [70,85) | Good |
+| [85,100] | Excellent |
 
 Grade 不得由 Agent 自行修改。
 
@@ -454,9 +460,9 @@ ImageId + QUALITY_ANALYSIS
 ```text
 Check Existing Result
  ↓
-Exists?
+QUALITY_ANALYSIS 成功且結果可重用?
  ├─ Yes → Skip / Return Existing Result
- └─ No  → Execute Analysis
+ └─ No  → Execute Analysis（不能只檢查共享 row 是否存在）
 ```
 
 目的：
@@ -480,7 +486,7 @@ QUALITY_ANALYSIS = Failed
  ↓
 ProcessingLog
  ↓
-Job Retry / Failed
+由 MOD-02 分類；Corrupted Image 不 Retry，temporary decode infrastructure error 才依核准政策 Retry
 ```
 
 錯誤代碼：
@@ -640,7 +646,48 @@ Application Contract。
 
 ---
 
+## 與 MOD-02 的已核准執行契約
+
+- MVP 單 Instance、多 Worker，MOD-02 以 SQL Server 原子 Claim 取得 Job 執行權；本模組不建立 Queue、Worker 或平行重試排程器。
+- 每Run的每個transient Step由MOD-02管理四個邏輯槽位0～3，重試等待1／2／4秒；Shutdown Resume沿用槽位而另記invocation，本模組不疊加retry loop。
+- host shutdown cancellation 向上傳播、不算 Retry；中斷由 MOD-02 處理，不能偽裝成 module failure 或 fallback。已提交成功結果需核對可重用性，不重做副作用。
+- Job Status、Step Result、Log Status 不混用；失敗由 MOD-02 協調持久化 Job transition，本模組不直接改其 enum。
+- D-05／D-06已核准MOD-02單一History writer、Run／checkpoint／invocation、提交後best-effort事件；Step從checkpoint映射、Timestamp為Log建立時間，schema見共用文件§3～§6。子模組回報Outcome，不重複寫History。
+- 保留每次 attempt History，重要 operation 安全保留 JobId／ImageId／TraceId；沿用 ILogger<T>，不輸出 raw exception／SQL／path／secrets，不重複 MOD-01 failure event。
+- 本模組的新增契約缺口與決策選項見 `docs/reviews/Specification-Revision-Review.md`；未決事項不能以一般實作細節自行補足。
+
+
+### MOD-07 獨立審閱與未決評分規則
+
+- M07-01／Minor（已修正）：§1.11／§4.4 原公式算例應為 85.5，不是 86.5；§3.3 DTO 的 weighted score 應為 90.95，不是 90.55。固定權重未變。
+- M07-02／Major：§1.6～§1.10 缺 Resolution／Laplacian／Exposure／Compression normalization 公式與校準參數；0～100 邊界不能代替算法，不能由選用 Library 默認值決定產品規則，待 D-11。
+- M07-03／Major：§1.12 的 0–49／50–69 等整數表示沒有定義 49.5／69.5／84.5 與 rounding／precision；維持整數邊界，連續小數政策待 D-11，不自行取整。
+- M07-04／Major：MOD-03 會填 UnknownCamera／FileCreatedAt 等 fallback，Metadata completeness 的「存在」可能把缺 EXIF 算成完整；是否計原始來源／有效值／fallback provenance 待 D-08／D-11。
+- M07-05／Major：§1.16 row exists 即 Skip 與 MOD-06 共享 ImageAnalysis 的 partial row 衝突。必須確認 QUALITY_ANALYSIS 成功且可重用，不以僅有 pHash 或 ImageAnalysis row 作成功證據；具體版本／mapping 待 D-10／D-11。
+
+GET Existing Image 只有 Quality 結果完成時才為 200；尚未完成為既有 409／QUALITY_ANALYSIS_NOT_FOUND，Image 不存在為 404。
+新增驗收：partial pHash-only row、Quality update 不覆寫 pHash、metadata fallback provenance、小數 grade 邊界、固定算例與重試分類；未決 normalization 不以 range-only tests 宣稱完成。
+
+---
+
+### D-05～D-07 同步限制
+
+只有binding／版本／Context可確認且T1／T2已原子提交Running Log後才開始本模組。結果／History保存重試不重做模組操作，也不消耗business retry budget。
+程序在T3前中斷時memory可能遺失；只讀計算需可重現Input／RuleVersion才能安全重算；已有SQL／Group／Storage副作用先核對，不因未保存checkpoint盲目重做。
+Unknown副作用／Context先阻擋。PrimaryJob才更新Image／BatchStatus，secondary不改Uploadaggregate。F-01～F-08的結果/版本/receipt已同步最終章；Analysis/Full尚有N-01/N-02，實作與驗收未完成。
+
+---
+
 # 2. 資料表
+
+## 共用 Schema 與交接基線
+
+physical mapping 以 `docs/Database-Schema.md` 已確認部分為共同依據；尚未定案的欄位、索引與關係明列為待決策，不假設不存在的原始 Database-Schema.md 已提供答案。
+沿用 MOD-01 Image.Id BIGINT、BatchId uniqueidentifier、DateTimeOffset／datetimeoffset(7) 與 Unicode mapping。
+SQL Server timestamp／rowversion 不是日期時間；日期不得以 TIMESTAMP mapping 實作。
+MOD-01 feature 尚未合併；TASK-11／12 最新驗收維持待確認，不能把後續模組未完成判作 MOD-01 Backend 缺陷。
+
+---
 
 ## 2.1 ImageAnalysis
 
@@ -669,7 +716,7 @@ ImageAnalysis
 
 ## 2.2 Database Constraints
 
-同一張圖片目前只應存在一筆 Quality Analysis Result。
+同一Image/ContentVersion/QualityRuleVersion只能一筆版本化Quality result；不同版本保留，current projection至多一筆。不以單Image唯一限制禁止歷史版本。
 
 建議：
 
@@ -762,7 +809,7 @@ Response：
     "exposureScore": 91.0,
     "metadataScore": 100.0,
     "compressionScore": 85.0,
-    "qualityScore": 90.55,
+    "qualityScore": 90.95,
     "grade": "Excellent"
   }
 }
@@ -893,7 +940,7 @@ Compression = 90
 預期：
 
 ```text
-QualityScore = 86.5
+QualityScore = 85.5
 ```
 
 ---
@@ -1218,7 +1265,7 @@ Quality Grade 必須符合：
 
 ### AC-07 API
 
-Existing Image：
+Existing Image 且 Quality Analysis 已完成：
 
 ```http
 GET /api/v1/images/{imageId}/quality
@@ -1401,3 +1448,22 @@ Build
 ```
 
 全部完成後才算 Quality Module Done。
+
+# 最終核准契約 — F-05（文件審核版）
+
+quality-rules-v1；保留Resolution/Sharpness/Exposure/Metadata/Compression權重25/30/15/10/20。原始解碼/Orientation/gray遵循MOD-06 reference規則，Quality分析視圖長邊縮至<=1024、不放大，area resize同數值定義；尺寸至少能產生有效分析樣本。必需影像資料損壞、有效內部Laplacian樣本不足或JPEG table不可解析時Permanent QUALITY_INPUT_INCOMPLETE/INVALID_IMAGE，不猜分、不把未完成結果寫Completed。
+
+| Component | 完整公式 |
+|---|---|
+| Resolution | 100*min(originalWidth*originalHeight/12000000,1)，尺寸先Orientation正常化，checked pixelCount |
+| Sharpness | interior(x,y)的L=Yleft+Yright+Yup+Ydown-4Ycenter；population variance mean(L^2)-mean(L)^2；100*min(variance/1000,1)，boundary不算樣本 |
+| Exposure | 100*(1-(n[Y<=5]+n[Y>=250])/N)，N為分析視圖所有有效像素，不double count |
+| Metadata | 100*validOriginalFields/6；六項有效判定完整引用MOD-03最終章，不以fallback/UnknownCamera/UnknownLoc計分，GPS pair一項 |
+| Compression JPEG | 找到luminance component實際使用的DQT；去DC後q=(sum63個AC量化值)/63；100*clamp((100-q)/99,0,1)；clamp(x,0,1)=min(max(x,0),1) |
+| Compression PNG | 有效PNG無損格式本項=100；只代表此啟發式Compression分數，不代表圖整體品質 |
+
+JPEG量化值依DQT precision還原無符號實際整數（有效非零，8/16bit依JPEG宣告），不靠decoder預估quality。grayscale取唯一component；YCbCr依luma component使用的table；同component跨scan若table重新定義且無唯一可核對表，不能猜平均、不能採最後DQT。CMYK/其他無可靠luma mapping或其他圖像格式不在本profile定義，Permanent UNSUPPORTED_QUALITY_FORMAT，不Retry；JPEG缺/零/損壞DQT為Permanent QUALITY_INPUT_INCOMPLETE。不得補Compression=0或100冒充成功。
+可選Metadata缺失/非法欄位只不計那項，分母仍6；Resolved結果引用provenance來源，無Metadata結果/版本不符為依賴未就緒，不當全六項缺失。Job workflow先MOD03，permanent Metadata failure按workflow終止，不產生半成品Quality Completed。
+ComponentDecimal，計算保留6位、final輸出2位round half away；weighted sum先按6位計，再用未兩位rounding總分Grade：[0,50)Poor、[50,70)Fair、[70,85)Good、[85,100]Excellent。rawmetrics/component/ContentVersion/MetadataResultReference/QualityRuleVersion與獨立Completed狀態持久化；shared ImageAnalysis若保留只是projection，不作版本result authority。
+缺失/非法/不支援情況已由核准的不得猜值/永久錯誤規則推導，沒有新增format支援或替代分數。啟發式閾值與準確性未驗證；PNG100、量化表映射與resolution都不是專業攝影保證。
+驗收0/100與小數grade、全fallback Metadata0、單GPS欄不計、不同DQT/DC不影響AC平均、q1得100/q100以上得0、PNG僅本項100、無DQT/不支持不Completed、sameimage並行不lost update。future實作量測，不本輪測試PASS。

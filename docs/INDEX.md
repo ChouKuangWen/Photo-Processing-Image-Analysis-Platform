@@ -19,6 +19,26 @@
 
 ---
 
+## 2026-10-12 規格修訂入口
+
+- [集中審閱、已核准決策與待決事項](reviews/Specification-Revision-Review.md)：保留兩次 MOD-02 Review，並加入 MOD-03～MOD-10 獨立審閱。
+- [共用 Schema 草稿](Database-Schema.md)：區分 MOD-01 已確認 mapping、ProcessingLog 原則及待決欄位，不取代未完成的決策或實際 DB 驗證。
+- 目前 working HEAD 仍是 main initial commit；只從固定 develop 版本產生授權文件草稿，沒有 Checkout／切換分支。Git status 顯示為新增文件，審閱差異須和紀錄中的 develop blob 比較。
+- MOD-01 feature 為交接證據，沒有合併；本次不修改 MOD-01 Spec／TASK／source。TASK-11／12 最新驗收維持待確認。
+- develop／feature 都沒有既有 MOD-02～MOD-10 TASK。保留全部既有 MOD-01 TASK；僅核對，不因尚未決策建立正式實作 TASK。下述原始 Schema 不存在的觀察為歷史基準，此輪新增文件仍為含待決事項的草稿。
+
+---
+
+## D-05～D-07 核准後的定位
+
+- MOD-02 §1.10/1.11：逻輯槽位、人工Run、defaults與單Instance停止前提。
+- MOD-02 §1.18～§1.22：T1～T5原子順序、Run/checkpoint狀態機、crash window与memory/side-effect恢復。
+- 共用Schema §3～§6：Runs、Checkpoints、Logs、PrimaryBindings；MOD-01原表仍§2。
+- MOD-09 §1.12/§3.4～§3.5：事件與pagination，REST是持久狀態來源。
+- 集中審阅§3/§4：D-05～07已核准、D-08～14/U-01～03待決，Issue文件解除與runtime未驗證分開。沒有正式TASK。
+
+---
+
 ## 全域文件
 
 | 文件 | 定位重點 |
@@ -117,3 +137,10 @@ Specification = 什麼是正確的
 Pre-Implementation Review = 能不能開始做
 Task Implementation = 實際完成 TASK
 ```
+
+## 本輪文件審核關卡（F-01～F-08已核准）
+
+- [最終文件審核報告](reviews/Specification-Revision-Review.md)：核心TASK規劃與各Workflow/延後項目分範圍判定，N-01引擎/精確版本與未驗證事項。
+- [共用Schema最終結果契約](Database-Schema.md)：新結果/input/等待欄位，不是已執行Migration。
+- 各MOD文件的「最終核准契約」章取代同題歷史待決文字；MOD10僅延後新Export能力，原規格保留且未通過完整實作准入。
+- 本輪未新建TASK、不修改MOD01/旗下TASK/source/migration、不checkout/commit/push/merge。MOD01 feature未合併，TASK11/12最新驗收待確認。

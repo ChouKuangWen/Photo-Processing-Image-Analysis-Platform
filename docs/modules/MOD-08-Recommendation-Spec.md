@@ -1,5 +1,11 @@
 # Recommendation Module Specification
 
+> **規格修訂草稿（2026-10-12）**：以 develop `8ff1dd983af2ffa68dfc93893f9cca61fadb2c90` 為基準。
+> MOD-01 feature `a1bb29e1d7cf704a202adbe1c14741b6441575be` 僅為交接證據，未合併進 develop。
+> 已核准與待決策內容分開記錄於 [規格審閱與決策紀錄](../reviews/Specification-Revision-Review.md)。
+> F-01～F-08已核准並同步至最終契約章；同題舊待決文字由最終章取代。引擎/精確版本N-01與實作驗收仍未完成；不是TASK、實作或PASS授權。
+
+
 **文件名稱：** Recommendation Module Specification  
 **模組編號：** MOD-08  
 **模組名稱：** Recommendation Module  
@@ -261,13 +267,13 @@ Metadata Score      = 100
 + 88 × 0.10
 + 92 × 0.10
 + 100 × 0.10
-= 92.6
+= 92.0
 ```
 
 因此：
 
 ```text
-Recommendation Score = 92.6
+Recommendation Score = 92.0
 ```
 
 **此公式屬於產品規則，AI Agent 不得自行調整權重。**
@@ -399,7 +405,7 @@ First Score - Second Score
 Score Gap >= 15
 → High
 
-Score Gap >= 5
+5 <= Score Gap < 15
 → Medium
 
 Score Gap < 5
@@ -786,7 +792,49 @@ Recommendation
 
 ---
 
+## 與 MOD-02 的已核准執行契約
+
+- MVP 單 Instance、多 Worker，MOD-02 以 SQL Server 原子 Claim 取得 Job 執行權；本模組不建立 Queue、Worker 或平行重試排程器。
+- 每Run的每個transient Step由MOD-02管理四個邏輯槽位0～3，重試等待1／2／4秒；Shutdown Resume沿用槽位而另記invocation，本模組不疊加retry loop。
+- host shutdown cancellation 向上傳播、不算 Retry；中斷由 MOD-02 處理，不能偽裝成 module failure 或 fallback。已提交成功結果需核對可重用性，不重做副作用。
+- Job Status、Step Result、Log Status 不混用；失敗由 MOD-02 協調持久化 Job transition，本模組不直接改其 enum。
+- D-05／D-06已核准MOD-02單一History writer、Run／checkpoint／invocation、提交後best-effort事件；Step從checkpoint映射、Timestamp為Log建立時間，schema見共用文件§3～§6。子模組回報Outcome，不重複寫History。
+- 保留每次 attempt History，重要 operation 安全保留 JobId／ImageId／TraceId；沿用 ILogger<T>，不輸出 raw exception／SQL／path／secrets，不重複 MOD-01 failure event。
+- 本模組的新增契約缺口與決策選項見 `docs/reviews/Specification-Revision-Review.md`；未決事項不能以一般實作細節自行補足。
+
+
+### MOD-08 獨立審閱與待決策
+
+- M08-01／Minor（已修正）：§1.7／§4.1 同輸入公式結果為 92.0，不是 92.6。§3.5 範例 runner-up 87.4 的 gap 為 4.6，Confidence = Low；§1.12 互斥區間表達已澄清，權重／5、15 閾值未改。
+- M08-02／Major：MOD-06 score 0～1，而 §1.7 要求 0～100；計算前只做尺度轉換 `normalizedSimilarity = similarityScore * 100`，不得把 source persistent score 改為百分制或重新算 pHash。group 的每 candidate source score 相對何者仍待 D-10／D-12。
+- M08-03／Major：§1.2 管理 VersionGroup，但與 VISUAL group 的一對一／派生／membership／ownership 未定；single／empty／multiple group 查詢及單候選 Confidence 也未定，待 D-12。
+- M08-04／Major：§1.14～§1.16 的 AnalysisVersion、RuleVersion、State、Invalidate／ForceRecalculate 沒有在 §2 Schema／接口完整呈現。shared group 的 Quality 尚未完成、永久 Failed、晚到 member 的喚醒／終止策略待D-12；D-05已定義Run／checkpoint，不代替GroupDependency政策。
+- M08-05／Major：§1.10 tie-break 的 ImageId ASC／DESC 未定；§1.11「明顯高於平均」「高分」未有數值定義；§3.4／§3.5 對同 Endpoint 的不同 payload 是否合併／選項待 D-12。
+- M08-06／Major：§1.2 要保存結果但 §2.2 為條件式持久化；保留條件文字作待決事項，不以本草稿批准新表／Migration。pending decision 必須先確定保存範圍與 Group+Version 的 concurrency protection。
+
+跨圖片 Job 可能共同計算同一 Group；Image+Step Claim 不足以取代 Group+AnalysisVersion 的冪等與併發保護。
+新增驗收：score 0～1 尺度轉換、沒有第二名、同分 stable ranking、group member 變動、Quality failure／pending、同版本 concurrent calculation／失效舊結果；具體預期先核准 D-12。
+
+---
+
+### D-05～D-07 同步限制
+
+只有binding／版本／Context可確認且T1／T2已原子提交Running Log後才開始本模組。結果／History保存重試不重做模組操作，也不消耗business retry budget。
+程序在T3前中斷時memory可能遺失；只讀計算需可重現Input／RuleVersion才能安全重算；已有SQL／Group／Storage副作用先核對，不因未保存checkpoint盲目重做。
+Unknown副作用／Context先阻擋。PrimaryJob才更新Image／BatchStatus，secondary不改Uploadaggregate。F-01～F-08的結果/版本/receipt已同步最終章；Analysis/Full尚有N-01/N-02，實作與驗收未完成。
+
+---
+
 # 2. 資料表
+
+## 共用 Schema 與交接基線
+
+physical mapping 以 `docs/Database-Schema.md` 已確認部分為共同依據；尚未定案的欄位、索引與關係明列為待決策，不假設不存在的原始 Database-Schema.md 已提供答案。
+沿用 MOD-01 Image.Id BIGINT、BatchId uniqueidentifier、DateTimeOffset／datetimeoffset(7) 與 Unicode mapping。
+SQL Server timestamp／rowversion 不是日期時間；日期不得以 TIMESTAMP mapping 實作。
+MOD-01 feature 尚未合併；TASK-11／12 最新驗收維持待確認，不能把後續模組未完成判作 MOD-01 Backend 缺陷。
+
+---
 
 ## 2.1 資料來源
 
@@ -823,8 +871,8 @@ Recommendation Module 不重複儲存上述分析資料。
 | RecommendedImageId | BIGINT | ✓ | 推薦圖片 |
 | RecommendationScore | DECIMAL | ✓ | 推薦分數 |
 | Confidence | VARCHAR(20) | ✓ | Confidence 等級 |
-| CreatedAt | TIMESTAMP | ✓ | 建立時間 |
-| UpdatedAt | TIMESTAMP | ✓ | 更新時間 |
+| CreatedAt | DATETIMEOFFSET(7) | ✓ | 建立時間 |
+| UpdatedAt | DATETIMEOFFSET(7) | ✓ | 更新時間 |
 
 ---
 
@@ -841,7 +889,7 @@ Recommendation Module 不重複儲存上述分析資料。
 | ImageId | BIGINT | ✓ | 圖片 ID |
 | Score | DECIMAL | ✓ | Recommendation Score |
 | Rank | INT | ✓ | 排名 |
-| CreatedAt | TIMESTAMP | ✓ | 建立時間 |
+| CreatedAt | DATETIMEOFFSET(7) | ✓ | 建立時間 |
 
 ---
 
@@ -957,7 +1005,7 @@ GET /api/v1/images/205/recommendation
     "imageId": 205,
     "versionGroupId": 10,
     "recommendedImageId": 205,
-    "recommendationScore": 92.6,
+    "recommendationScore": 92.0,
     "confidence": "High",
     "reasons": [
       "Higher quality score",
@@ -981,12 +1029,12 @@ API 應提供群組內候選圖片排名。
   "data": {
     "versionGroupId": 10,
     "recommendedImageId": 205,
-    "recommendationScore": 92.6,
-    "confidence": "High",
+    "recommendationScore": 92.0,
+    "confidence": "Low",
     "candidates": [
       {
         "imageId": 205,
-        "score": 92.6,
+        "score": 92.0,
         "rank": 1
       },
       {
@@ -1104,7 +1152,7 @@ Recommendation Calculator 必須測試：
 + 88 × 0.10
 + 92 × 0.10
 + 100 × 0.10
-= 92.6
+= 92.0
 ```
 
 ### Ranking 測試
@@ -1138,7 +1186,7 @@ Score
 
 ```text
 Gap >= 15 → High
-Gap >= 5  → Medium
+5 <= Gap < 15 → Medium
 Gap < 5   → Low
 ```
 
@@ -1497,3 +1545,25 @@ Module Boundary
 ```
 
 只有以上條件全部符合，Recommendation Module 才視為完成。
+
+# 最終核准契約 — F-06（文件審核版）
+
+MOD08對明確VISUAL membership snapshot計算，不新增平行VERSION group；VERSION_ANALYSIS兼容Step adapter。所有member Quality須同rule/version且Completed；永久Failed使本Step/Run/Job Permanent Failed，不把缺分當0、不無限Waiting。
+
+## Dependency等待／执行互斥
+
+120秒是可設定MVP預設，未效能驗證。第一次在VERSION_ANALYSIS invocation前查得未就緒時，短SQL transaction以DB UTC保存DependencyWaitStartedAt與DependencyWaitDeadlineAt=start+本次配置、DependencyWaitStatus=Waiting，checkpoint.Pending、Run.Active/Job.Processing；不新增Running Log、不消耗Retry槽位，不占Worker。只有此前Step已完成且本Step無Running才能建立wait。
+依賴scanner每5秒檢查；先鎖Job/Run/checkpoint、核對deadline/依賴及沒有Running，再在同T2 transaction把Waiting→Resolved、checkpoint→Processing、建立唯一Running Log/Attempt identity，commit後才調adapter。依賴與deadline在同交易核對；DB now>=deadline先Expired並Failed，不因剛就緒而延長。到期管理交易關checkpoint/Run/Job Failed，DEPENDENCY_NOT_READY Permanent；沒有實際invocation不捏造一筆Running/Failed History，安全SystemLog/ProcessingFailed事件commit後通知。
+StartedAt/DeadlineAt不因補調度、scanner、重啟、配置變動、queue重複通知重設；wall-clock downtime計入120秒。重啟待舊程序確認停止後，無Running的Waiting Run保持明確等待資格，不當舊執行者回收，不建立新Run/邏輯Retry；若到期立即Expired，未到期照原deadline。等待與執行不能並存：Waiting iff checkpoint.Pending/無Running；Resolved才能Processing/Running；transaction條件更新與唯一索引防多Worker同時wake。
+Resolved/Expired與原start/deadline保留歷史。Waiting checkpoint不是任意Processing reclaim許可；unknown副作用仍阻擋。host shutdown不計Retry；管理性等待超時不等同Geo transient或Step invocation timeout。
+
+## 分數、版本與API
+
+每candidate對其餘snapshot members的真實同Profile pHash分數取均值（臨時計算，不保存所有pair）；same集合作完整計算，遵循1000/比較併發2，不能用缺edge當0。singleton推薦自己，SimilarityScore=100、confidence=null/NoRunnerUp；空snapshot Empty/無推薦、Step顯式Skipped。固定Score=Quality*.5+Similarity(0..1)*100*.2+Resolution*.1+Sharpness*.1+Metadata*.1。
+排序Score/Quality/Resolution/Sharpness/Metadata DESC、ImageId ASC；confidence沿用gap>=15 High、>=5 Medium、其餘Low。reasons固定code、有資料依據：Quality>=mean+5，其餘sharpness/resolution/exposure>mean，Metadata=100才CompleteMetadata。
+唯一(SnapshotId,QualityRuleVersion,RecommendationRuleVersion)持久化ranked result與inputs/resultVersion/Completed；snapshot merge/input版本改則Stale，不偷偷覆寫或自動重分析。既有GET入口包含snapshot/version/ranking/singleton/empty，不新增獨立rankingAPI。single-link同群不是每pair達標/可删保證。
+
+## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
+
+正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。
+這是規格缺口而非已證實runtime deadlock。保持Analysis/Full完整實作准入BLOCKED，核心TASK規劃與Naming不因本缺口阻擋。推薦下一次針對N-02核准把VISUAL候選等待納入既有T2-W（讓出Worker、持久deadline、版本核對、無Running/不消耗Retry、ready後原子開始）；VISUAL等待budget與逾時政策需集中決定，不能擅自挪用Recommendation120秒或改Step順序。本輪不實作、不建立TASK、不改已核准checkpoint wait範圍。
