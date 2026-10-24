@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- TASK-10 測試重用 API 型別與組合根；只增加專案參考，不新增 NuGet 套件。 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/PhotoPlatform.Domain/PhotoPlatform.Domain.csproj" />
+    <ProjectReference Include="../../src/PhotoPlatform.Api/PhotoPlatform.Api.csproj" />
+    <ProjectReference Include="../../src/PhotoPlatform.Application/PhotoPlatform.Application.csproj" />
+    <ProjectReference Include="../../src/PhotoPlatform.Infrastructure/PhotoPlatform.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>
