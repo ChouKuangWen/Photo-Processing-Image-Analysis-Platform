@@ -309,7 +309,7 @@ HTTP 400／401／403／404、invalid/corrupted image、永久 missing file、inv
 每次 transient failure 的 Log／checkpoint 與 NextRetryAt 持久化；Job／Run 維持 Processing／Active，checkpoint 進入 RetryWaiting。
 NextRetryAt 由該次失敗完成時間加 1／2／4 秒得出，重啟不重設 budget 或期限。
 GEO_LOOKUP 四個槽位耗盡時 LocationName = UnknownLoc、checkpoint ResultStatus = Warning，保留其餘 Metadata 並繼續下一 Step；不是 Job Failed。
-Shutdown cancellation 不冒充 Geo failure／fallback。永久 Geo error 與 metadata 輸入分類仍待 D-08。
+Shutdown cancellation 不冒充 Geo failure／fallback。Geo error 與 Metadata 輸入分類依 `docs/modules/MOD-03-Metadata-Spec.md`「最終核准契約 — F-01／F-05」及本文件最終 F-07 章：MissingGPS 為 Skipped、InvalidGPS／transient 耗盡為 Warning；auth/configuration failure 為 Permanent Failed，不以 fallback 掩蓋。
 
 ### 人工 Retry
 
@@ -536,7 +536,7 @@ Retry 可使 Batch 終態回 Pending／Processing，清除 CompletedAt；下一�
 不變量：ProcessedCount = SuccessCount + FailedCount；0 <= ProcessedCount <= TotalCount；TotalCount 不因新 Workflow／Retry 改動。
 未知 binding 不當 Pending 或零貢獻猜測，不以 Query clamp 掩蓋資料錯誤；先阻擋相關執行並要求交接確認。
 MOD-01 既有 Query DTO／endpoint、Decimal 公式、TotalCount=0 → 0、0～100 clamp 不變；MOD-09 重用，不新建第二套 aggregate。
-Step Skipped 對必要 Workflow 完成的判定仍須 D-09／D-14，不能自行把全部 Skip 判為 Completed。
+Step Skipped 對必要 Workflow 完成的判定依本文件最終 F-07「WorkflowVersion與准入」及所引用模組的最終契約；僅明確核准的 Skipped 可滿足必要 Step 完成條件，不能自行把全部 Skip 判為 Completed。
 
 ---
 
@@ -545,7 +545,7 @@ Step Skipped 對必要 Workflow 完成的判定仍須 D-09／D-14，不能自行
 Primary Claim、恢復執行與任何 aggregate 更新前，必須核對該 Batch 全部已接受 Image 的 Primary binding 集合；集合涵蓋、Job/Image/Batch/Workflow 一致且主 Job 可由交接證據確認，才可准入。新 Image 加入後，不能沿用舊集合的確認結果；在相關短交易重新確認集合有效性，不能僅依記憶體 ready flag。
 未知 binding 的 Image 所有 Job 仍不執行；其他 binding 已確認的 secondary 不因本條新增全 Batch aggregate 門檻，但仍遵守自身 Context／副作用保護。未完成確認的 Batch 不開始 Primary Step／副作用，不將 Job／Image／Batch 偽造為新的阻擋狀態；Job 保留既有持久狀態。阻擋僅限該 Batch，scanner／Worker 必須繼續處理其他已確認 Batch。
 
-阻擋原因須可唯讀查詢，區分缺少 binding、主 Job 證據不唯一、跨表關聯不一致、集合／計數無法核對；呈現安全的 Batch／Image identifier 與原因分類，不公開 SQL／路徑／原始 exception。MOD-09 讀取診斷，不能由 Query 選主、修復或排程。具體診斷 DTO／路由／原因代碼及是否持久化仍待確認，不修改 MOD-01 Query 契約。
+阻擋原因須可唯讀查詢，區分缺少 binding、主 Job 證據不唯一、跨表關聯不一致、集合／計數無法核對；呈現安全的 Batch／Image identifier 與原因分類，不公開 SQL／路徑／原始 exception。MOD-09 讀取診斷，不能由 Query 選主、修復或排程。診斷 response／路由／原因代碼依 `docs/modules/MOD-09-Monitoring-Spec.md`「最終核准契約 — F-08」；不新增診斷持久表或 MOD-01 Status，不修改 MOD-01 Query 契約。
 解除方式：補齊可核對交接證據／由另行授權程序修正矛盾，MOD-02 重新核對完整集合後解除准入阻擋，再按既有 Pending 補排程規則處理。不得猜最早 Job、偷偷換主、用 Query 修復或強制 unblock；Processing Job 的回收仍須確認舊程序已停止。本次不新增修復 API／資料修復 TASK。
 
 驗收案例（未執行）：同 Batch 任一 Primary binding 未知時全部 Primary 不 Claim；其他已確認 Batch 可執行；證據補齊且重驗成功後 Pending 可補排程；Query 無寫入；新增 Image 使舊集合確認失效；503拒絕無新增／排程副作用。
@@ -741,8 +741,8 @@ Storage rename／move、外部資源不屬SQL Transaction，不承諾Rollback可
 | 純計算／只讀（受控原圖／snapshot、版本未變） | 記憶體Hash／pHash／Quality計算／Metadata解析結果可丟棄後在同邏輯槽位重算；須有完整可重現Input／RuleVersion，具体規則仍待各模組 |
 | 已提交SQL結果有兼容ResultReference | 讀取與重用，補齊同一checkpoint／History終態，不再次做演算法或套用aggregate |
 | SQL commit outcome未知 | 先查DB證據；不能以timeout或缺少memory當未提交 |
-| Group／Recommendation／共享結果upsert | 先核對group／version／unique／result證據，不能只看row存在；D-10／D-12未定前不批准盲目重算 |
-| Rename／move／建立或刪除Storage物件 | 必須核對來源／目標／receipt或模組冪等結果；不重複rename、不把錯誤刪檔當恢復；細節D-09待決 |
+| Group／Recommendation／共享結果upsert | 先核對group／version／unique／result證據，不能只看row存在；結果 ownership、version key 與 conditional update 依 `docs/Database-Schema.md` §9 及 MOD-05／MOD-06／MOD-08 最終契約。契約已決不代表結果重用與並行恢復已驗收，未知證據仍不批准盲目重算 |
+| Rename／move／建立或刪除Storage物件 | 必須核對來源／目標／receipt或模組冪等結果；不重複rename、不把錯誤刪檔當恢復。Naming input、OperationId、Create／Inspect 與 receipt 依 `docs/modules/MOD-04-Naming-Spec.md` 最終 F-02 章及 `docs/Database-Schema.md` §9；保留原檔，FILE_RENAME 僅建立 artifact。cleanup／reapply 仍延後，未核准不得自動清理 |
 | 無法確認副作用／Input已變／沒有可重用版本 | 保持相關Job阻擋、不Queue、不開始新invocation；回報reconciliation prerequisite，不能猜測Success或自動Failed再Retry |
 
 只有成功核對結果後才完成T3或安全T4；unknown副作用可保留Processing／Active作未關閉狀態，但不是活躍執行、不可被runtimescanner回收。
@@ -750,7 +750,7 @@ SystemLogger failure為best-effort，不覆蓋原始失敗；durableHistory fail
 
 ### 交易／關閉補充
 
-同Run依核准StepOrder序列執行，不自行平行同Run Step。Job-level Worker可並行；跨Job相同Image+Step／Group protection仍待模組結果契約。
+同Run依核准StepOrder序列執行，不自行平行同Run Step。Job-level Worker可並行；跨Job相同Image+Step／Group protection依本文件最終 F-07 章、`docs/Database-Schema.md` §9 及所屬模組最終結果契約，以 result row／version key／unique、ProcessingOwnerCheckpointId 與 rowversion conditional update 協調；Job Claim 不取代結果所有權核對，並行正確性仍待實作驗收。
 Run Failed時未執行的後續checkpoint可保持Pending，但terminalRun使它們不可執行；不偽造Skipped History。Run Completed必須核對WorkflowVersion的全部必要checkpoint已Completed，必要／可跳過規則依最終F-07章，任意Skip不可算完成。
 人工Retry的新Run沿用原Workflow／Input／Rule定義，不藉此更換Template或版本。來源已變或原Context不可確認時拒絕本Retry路徑並回報，重新分析仍另決策。
 未知副作用的旧Running Log可保持未確認終態，Running不等於舊process仍活著；核對證據後才完成其終態，不能先改Interrupted再覆寫Success以掩蓋歷史。
@@ -775,7 +775,7 @@ Run Failed時未執行的後續checkpoint可保持Pending，但terminalRun使它
 | terminalJob卻ActiveRun、缺binding或歷史矛盾 | 不符合不變量 | 阻擋／回報，不能關舊Run再新增以掩蓋缺證據 |
 
 必要驗收：每個T1寫入點注入失敗應整筆回滾；Claim後沒有孤立ActiveRun或RunningLog；doubleConsumer僅一invocation；T3commit不明不重複delta；shutdownresume同Run/ordinal；Failed終止關Run、ManualRetry封存舊Run；未知binding／副作用零新執行；舊process停止未確認不回收。
-上述是規格驗收要求，尚未執行。D-08～D-14未定的模組結果／副作用核對不能以此表宣稱已解決。
+上述是規格驗收要求，實作與測試尚未執行。D-08～D-14 在 F-01～F-08 核准範圍的結果／副作用契約依各模組最終章及 `docs/Database-Schema.md` §9；N-01 引擎／精確版本與 N-02 VISUAL 候選等待調度仍未決，阻擋完整 Analysis／Full 實作准入。D-13 新 Export 能力、cleanup／reapply 等延後範圍仍維持原限制；不得以本表宣稱 runtime／SQL／Storage 驗收通過，亦不因此一概阻擋 MOD-02 核心 TASK 規劃。
 
 ---
 
@@ -1278,7 +1278,7 @@ Completed
 - Shutdown 不消耗 retry，重啟恢復；timeout 不重疊 operation；先成功 completion 後取消不退回。
 - Commit→Enqueue failure／部分 enqueue／取消保留 MOD-01 graph 與 Storage，Pending 可補排程。
 - 每 Job 獨立 scope／DbContext；全程維持 MOD-01既有 Queue、Schema、API regression。
-- D-05～D-07的crash-window、runtime Pending reconciliation、attempt、History／Event、binding／Batchdelta依 §1.18～§1.22要求驗收；未執行，不標PASS。結果重用／副作用細節依D-08～D-14保持待決。
+- D-05～D-07的crash-window、runtime Pending reconciliation、attempt、History／Event、binding／Batchdelta依 §1.18～§1.22要求驗收；實作與測試尚未執行，不標PASS。結果重用／副作用依 F-01～F-08 已核准最終契約及 `docs/Database-Schema.md` §9；N-01／N-02 仍阻擋完整 Analysis／Full 實作准入，D-13 新 Export 能力與 cleanup／reapply 等維持延後，核心 TASK 規劃准入依本文件最終 F-07／F-08 章。
 
 目前規格修訂、無實作／執行測試證據。正式 Implementation TASK 必須等待待決策契約與 MOD-01 handoff 驗收版本確認。
 
