@@ -1,5 +1,11 @@
 # Metadata Module Specification
 
+> **規格修訂草稿（2026-10-12）**：以 develop `8ff1dd983af2ffa68dfc93893f9cca61fadb2c90` 為基準。
+> MOD-01 feature `a1bb29e1d7cf704a202adbe1c14741b6441575be` 僅為交接證據，未合併進 develop。
+> 已核准與待決策內容分開記錄於 [規格審閱與決策紀錄](../reviews/Specification-Revision-Review.md)。
+> F-01～F-08已核准並同步至最終契約章；同題舊待決文字由最終章取代。引擎/精確版本N-01與實作驗收仍未完成；不是TASK、實作或PASS授權。
+
+
 **文件名稱：** Metadata Module Specification  
 **模組編號：** MOD-03  
 **模組名稱：** Metadata Module  
@@ -161,10 +167,11 @@ EXIF DateTimeOriginal
 如果 EXIF 沒有拍攝時間：
 
 ```text
-TakenAt = FileCreatedAt
+TakenAt = Image.CreatedAt
+TimeSource = UploadCreatedAt
 ```
 
-Fallback 不應造成整個 Processing Failed。
+Fallback 不應造成整個 Processing Failed；只有有效 EXIF offset 可建立可信 instant，無 offset 不猜時區。UploadCreatedAt 不是實際拍攝時間，不計入原始 Metadata completeness。
 
 ---
 
@@ -432,7 +439,7 @@ Metadata 缺失時使用以下規則：
 
 | Metadata | Fallback |
 |---|---|
-| TakenAt | FileCreatedAt |
+| TakenAt | Image.CreatedAt；TimeSource=UploadCreatedAt，不計原始 completeness |
 | CameraModel | UnknownCamera |
 | LocationName | UnknownLoc |
 | ISO | null |
@@ -463,7 +470,7 @@ Metadata 必須轉換成系統統一格式。
 ```text
 EXIF DateTime
     ↓
-DateTime
+DateTimeOffset（來源時區與 offset 缺失政策待 D-08）
 
 EXIF GPS DMS
     ↓
@@ -600,7 +607,7 @@ Continue
 例如：
 
 - Image File 不存在
-- Storage 無法讀取
+- Storage 永久不可讀（temporary I/O／timeout 應分類為 transient 並交 MOD-02）
 - 圖片完全無法解析
 
 處理：
@@ -617,33 +624,11 @@ ProcessingLog
 
 ## 1.22 Retry
 
-Geo Service 使用 Exponential Backoff：
-
-```text
-Retry 1 → 1 sec
-Retry 2 → 2 sec
-Retry 3 → 4 sec
-```
-
-適用：
-
-```text
-408
-429
-5xx
-Timeout
-```
-
-不適用：
-
-```text
-400
-401
-403
-404
-```
-
-最大 Retry 次數由 Configuration 控制。
+遵守 MOD-02 §1.10 統一的 Step transient retry：四個邏輯槽位（初次＋最多三次重試），1／2／4秒；Shutdown Resume另記invocation不增加槽位。
+IGeoService／MetadataService 不另行 retry；正確分類 408／429／5xx／timeout／temporary network error 與永久 400／401／403／404。
+GEO_LOOKUP transient failure 耗盡後，LocationName = UnknownLoc、Warning Log、保留已完成 EXIF／GPS 與其他 Metadata，繼續下一個 Workflow Step。
+Fallback 不是 Job Failed；Host shutdown cancellation 不計入 Retry、不觸發 Geo fallback，交由 MOD-02 安全恢復。
+Step checkpoint已依D-05定義；永久Geo/invalidGPS與result reference依F-01最終章，不能把auth/config套transient fallback。
 
 ---
 
@@ -742,7 +727,47 @@ Wait for Approval
 
 ---
 
+## 與 MOD-02 的已核准執行契約
+
+- MVP 單 Instance、多 Worker，MOD-02 以 SQL Server 原子 Claim 取得 Job 執行權；本模組不建立 Queue、Worker 或平行重試排程器。
+- 每Run的每個transient Step由MOD-02管理四個邏輯槽位0～3，重試等待1／2／4秒；Shutdown Resume沿用槽位而另記invocation，本模組不疊加retry loop。
+- host shutdown cancellation 向上傳播、不算 Retry；中斷由 MOD-02 處理，不能偽裝成 module failure 或 fallback。已提交成功結果需核對可重用性，不重做副作用。
+- Job Status、Step Result、Log Status 不混用；失敗由 MOD-02 協調持久化 Job transition，本模組不直接改其 enum。
+- D-05／D-06已核准MOD-02單一History writer、Run／checkpoint／invocation、提交後best-effort事件；Step從checkpoint映射、Timestamp為Log建立時間，schema見共用文件§3～§6。子模組回報Outcome，不重複寫History。
+- 保留每次 attempt History，重要 operation 安全保留 JobId／ImageId／TraceId；沿用 ILogger<T>，不輸出 raw exception／SQL／path／secrets，不重複 MOD-01 failure event。
+- 本模組的新增契約缺口與決策選項見 `docs/reviews/Specification-Revision-Review.md`；未決事項不能以一般實作細節自行補足。
+
+
+### MOD-03 獨立審閱缺口（未核准）
+
+- M03-01／Major：§1.6 的 FileCreatedAt 沒有在 MOD-01 DTO／Image／Storage Contract 定義來源，雲端也不能假设可讀原始檔案 creation time。D-08本批已核准Image.CreatedAt並標UploadCreatedAt；不計原始completeness，獨立結果保存。
+- M03-02／Major：§1.11／§2.1 的 Orientation 為需求，但 MOD-01 feature 沒有欄位；保存位置與遷移影響待 D-08。
+- M03-03／Major：EXIF 缺 offset、GPS ref／負座標與 malformed partial Metadata 的確切規則未定義；不得默認 machine timezone。
+- M03-04／Major：§1.19 ExtractAsync 同時概述 EXIF／Geo／Persist，兩個 Step 的切分與 Stream read／ownership 未定義；既有 IFileStorageService 僅 Save／Delete，見 D-09。
+- M03-05／Major：GET 既有 Metadata 與 Geo／INVALID_GPS 的 503／500 mapping 關係不明；Query 不應擅自觸發 Geo retry／解析。要選擇 persisted-only 查詢或明確另定契約，見 D-08。
+
+新增驗收要求待上述決策定案後明確化：來源時區缺失、signed GPS、Orientation persistence、missing GPS 不呼叫 Geo、四次 Geo retry／Warning continue、host cancellation 不 fallback、已完成 EXIF 在 Geo recovery 時不重做。
+
+---
+
+### D-05～D-07 同步限制
+
+只有binding／版本／Context可確認且T1／T2已原子提交Running Log後才開始本模組。結果／History保存重試不重做模組操作，也不消耗business retry budget。
+程序在T3前中斷時memory可能遺失；只讀計算需可重現Input／RuleVersion才能安全重算；已有SQL／Group／Storage副作用先核對，不因未保存checkpoint盲目重做。
+Unknown副作用／Context先阻擋。PrimaryJob才更新Image／BatchStatus，secondary不改Uploadaggregate。F-01～F-08的結果/版本/receipt已同步最終章；Analysis/Full尚有N-01/N-02，實作與驗收未完成。
+
+---
+
 # 2. 資料表
+
+## 共用 Schema 與交接基線
+
+physical mapping 以 `docs/Database-Schema.md` 已確認部分為共同依據；尚未定案的欄位、索引與關係明列為待決策，不假設不存在的原始 Database-Schema.md 已提供答案。
+沿用 MOD-01 Image.Id BIGINT、BatchId uniqueidentifier、DateTimeOffset／datetimeoffset(7) 與 Unicode mapping。
+SQL Server timestamp／rowversion 不是日期時間；日期不得以 TIMESTAMP mapping 實作。
+MOD-01 feature 尚未合併；TASK-11／12 最新驗收維持待確認，不能把後續模組未完成判作 MOD-01 Backend 缺陷。
+
+---
 
 ## 2.1 Images
 
@@ -756,19 +781,19 @@ Metadata Module 使用的欄位：
 
 | 欄位 | 型別 | Nullable | 說明 |
 |---|---|---|---|
-| ImageId | bigint / GUID | No | Image Identifier |
-| TakenAt | datetime | Yes | 拍攝時間 |
+| Id | BIGINT | No | Image Identifier（API／DTO 稱 imageId） |
+| TakenAt | datetimeoffset(7) | Yes | 拍攝時間；offset 解析政策待 D-08 |
 | CameraModel | nvarchar(100) | Yes | 相機型號 |
 | ISO | int | Yes | ISO |
-| ShutterSpeed | nvarchar(50) | Yes | 快門速度 |
-| Aperture | nvarchar(50) | Yes | 光圈 |
-| Latitude | decimal | Yes | 緯度 |
-| Longitude | decimal | Yes | 經度 |
+| ShutterSpeed | varchar(50) | Yes | 快門速度（沿用 MOD-01） |
+| Aperture | varchar(50) | Yes | 光圈（沿用 MOD-01） |
+| Latitude | decimal(10,7) | Yes | 緯度 |
+| Longitude | decimal(10,7) | Yes | 經度 |
 | LocationName | nvarchar(150) | Yes | 地點名稱 |
-| Orientation | int | Yes | 圖片方向 |
-| UpdatedAt | datetime | No | 更新時間 |
+| Orientation | 獨立Metadata結果tinyint CHECK1..8 | Yes | 不新增MOD-01 Image欄位，非法raw值保存在provenance |
+| UpdatedAt | datetimeoffset(7) | No | 更新時間 |
 
-實際欄位型別應以 `Database-Schema.md` 為準。
+已確認欄位見 `docs/Database-Schema.md`；Orientation 與來源時間／offset 的缺口不得以本表提案自行新增 Schema。
 
 ---
 
@@ -840,7 +865,7 @@ GET /api/v1/images/{imageId}
 Path Parameter：
 
 ```text
-imageId : bigint / GUID
+imageId : long（SQL Server BIGINT）
 ```
 
 Request Body：
@@ -977,7 +1002,7 @@ Invalid EXIF
 ```text
 EXIF TakenAt 存在
 EXIF TakenAt 不存在
-Fallback → FileCreatedAt
+Fallback → Image.CreatedAt (UploadCreatedAt)
 ```
 
 ---
@@ -1168,7 +1193,8 @@ Image Detail
 驗證：
 
 ```text
-TakenAt = FileCreatedAt
+TakenAt = Image.CreatedAt
+TimeSource = UploadCreatedAt
 CameraModel = UnknownCamera
 ```
 
@@ -1261,7 +1287,8 @@ When：
 Then：
 
 ```text
-TakenAt = FileCreatedAt
+TakenAt = Image.CreatedAt
+TimeSource = UploadCreatedAt
 CameraModel = UnknownCamera
 ```
 
@@ -1427,3 +1454,25 @@ Metadata Module 完成前必須確認：
 - [ ] API Tests
 - [ ] Playwright E2E Tests
 - [ ] Acceptance Criteria 全部通過
+
+# 最終核准契約 — F-01／F-05（文件審核版）
+
+本章依使用者F-01～F-08核准及最後補充同步，取代前文同題的舊待決策描述；不是實作／測試PASS。不修改MOD-01 mapping。
+
+## Metadata來源、有效性與結果
+
+獨立image_metadata_results為版本化authority；唯一(ImageId,InputFingerprint,MetadataRuleVersion)。時間可信須DateTimeOriginal可解析且OffsetTimeOriginal是有效±HH:mm、可構成DateTimeOffset；無offset不猜時區、保留原始local time。缺可信instant用Image.CreatedAt並標TimeSource=UploadCreatedAt，不稱真實拍攝時間，不计原始completeness。RawTakenAt/offset/provenance必須保留。
+Orientation合法1～8僅套用解碼分析視圖一次；缺少按identity，非法按identity並Warning，provenance可區分，不改原始檔案。
+Metadata有效六項：可信原始TakenAt；trim後非空且不為fallback UnknownCamera的原始CameraModel（符合既有100字元限制）；原始ISO整數>0；原始Aperture有限正值；原始ExposureTime可解析有限正數／正有理數（展示ShutterSpeed不代替驗證）；GPS為原始有效成對緯經度，EXIF reference N/S/E/W可核對，範圍[-90,90]/[-180,180]。Missing/Invalid/Fallback不充數，GPS一對只算一項，Geo的地名不是六項之一。
+
+| 情況 | Geo／Step結果 | LocationName |
+|---|---|---|
+| MissingGPS | 不呼叫Geo，GEO_LOOKUP Skipped；Metadata可正常完成 | UnknownLoc |
+| InvalidGPS：缺半邊／reference或範圍不合法 | 不呼叫Geo，GEO_LOOKUP Warning | UnknownLoc |
+| 有效GPS、Geo成功 | Success、GeoOutcome=Resolved | 已保存結果 |
+| transient耗盡四邏輯槽位 | Warning、GeoOutcome=TransientExhausted，後續繼續 | UnknownLoc |
+| auth/configuration failure | Permanent Failed，GeoOutcome分別AuthFailure/ConfigurationFailure，不Retry，Job/Run失敗 | 不能用fallback掩蓋服務配置故障 |
+
+EXIF結果與Geo結果分別對應checkpoint。缺少可選Metadata不失敗；損壞圖像／不支援格式／必需輸入不可讀依永久錯誤處理，不偽造Completed。失敗row不可當Completed結果重用。
+Metadata結果與History/checkpoint、必要Primary投影同T3 transaction；MOD-03 owns result、MOD-02單一History writer、MOD-09查詢。只有已核對PrimaryJob投影既有Image欄位；secondary保存獨立結果，不覆寫全域Metadata。
+GET只讀已持久化結果。InputFingerprint/SourceSHA256核對原始內容與RuleVersion；MOD-01未保存ContentVersion，reader須由原始內容SHA256核對，不能捏造storage version。此內容完整性hash不等同EXACT group建立，不能跨模組做duplicate副作用。結果前crash可重parse，Geo可能再呼叫；結果後按版本重用，不保證memory跨重啟。

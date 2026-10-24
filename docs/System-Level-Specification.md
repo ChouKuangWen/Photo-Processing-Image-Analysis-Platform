@@ -1,5 +1,7 @@
 # System-Level Specification
 
+> 規格修訂草稿（2026-10-12）。develop 基準與 MOD-01 feature 交接證據、已核准決策與未解除 Issue 見 [集中審閱紀錄](reviews/Specification-Revision-Review.md)。本次不宣稱實作／驗收或 feature 合併完成。
+
 # 智慧影像處理與分析平台
 
 **文件名稱：** System-Level Specification  
@@ -758,6 +760,15 @@ Pending
 
 ---
 
+## 已核准的 State／Recovery 例外
+
+一般 transition 保持 Pending → Processing → Completed／Failed、合資格 Failed → Pending。
+管理例外為安全單 Instance Startup Recovery 的 Processing → Pending；只在舊 Instance 已停止且不和活躍 Worker 競爭時使用。
+Pending 本身仍須補排程，Completed 不恢復；Failed 不由 Recovery 自動繞過 Retry 分類。詳細契約見 MOD-02 §1.5／§1.10／§1.11。
+Step transient retry 不修改整個 Job 為 Failed／Pending；Shutdown cancellation 不計入 Retry、不判永久 Failed，下一次安全啟動恢復中斷 Job。
+
+---
+
 # 1.13 System Processing Flow
 
 完整圖片分析流程可以表示為：
@@ -1092,7 +1103,7 @@ Application 必須透過：
 IFileStorageService
 ```
 
-存取圖片。
+存取 Upload 圖片的既有 Save／Delete。D-09基本邊界已核准：後續模組的 read／artifact 使用獨立 Application abstraction，由 Infrastructure 實作；不修改 MOD-01 的 IFileStorageService Save／Delete 介面，不允許 Application 直接存取 SDK／檔案系統。具體Create/Inspect與持久化/禁止cleanup依MOD04最終F-02章。
 
 Development：
 
@@ -1168,7 +1179,16 @@ Restore Required State
 Requeue
 ```
 
-File Rename / Move 無法依賴 Database Transaction 完整 Rollback，因此需要 Compensation Strategy。
+Naming Artifact Creation / Move 無法依賴 Database Transaction 完整 Rollback，因此需要 Compensation Strategy。
+
+---
+
+## 已核准的 Retry 協調與 Geo fallback
+
+由 MOD-02 統一協調 Step transient retry，初次失敗後最多三次重試，總四次執行，等待 1／2／4 秒。
+子模組不疊加 retry loop；永久輸入／configuration／corruption 不 Retry。Host shutdown 不消耗 retry。
+MOD-03 GEO_LOOKUP transient 耗盡後 LocationName = UnknownLoc、Step Warning、保留已成功 Metadata 並繼續原 Workflow；不是撤銷 Upload、不是整個 Batch Failed。
+D-05～D-07已核准Run／checkpoint／History／binding與狀態機。四次上限是邏輯槽位，Shutdown同槽位Resume另記invocation；人工Retry最多三個新增Run，只接受Failed/transient。已確認Status／Run／History按短SQLtransaction提交後通知，memory不保證跨重啟。模組結果與副作用核對依最終F-01～F-08章，N-01/N-02仍未解除，不宣稱Reliability已實作。
 
 ---
 
@@ -1523,6 +1543,25 @@ Future 可評估：
 
 ---
 
+## 已核准的 MVP 執行限制
+
+同一 Job Database／工作集合只有一個執行 Instance，允許該 Instance 內多 Worker，Claim 必須是 SQL Server 原子條件操作，不以 Memory Lock 取代。
+前面的「1 Worker」表示一個 Worker host／部署單位，不限制 Consumer 數為一；MaxConcurrency 仍受 Configuration 控制。
+多 Instance ownership、lease／heartbeat、失效判定與舊執行者寫入防護為後續工作。未完成這些契約前，部署不得啟動同工作集合的重疊執行 Instance。
+
+---
+
+## D-05～D-07 啟動、恢復與提交契約
+
+部署／啟動必須先確認舊程序已停止且不再執行副作用；未知時不回收Processing、不開放新Claim。Readiness false／health timeout／舊PID檔／grace period到期不等於停止證據。
+binding與Workflow/Input契約有效後，JobClaim、ActiveRun建立／恢復、checkpointProcessing與RunningLog在同一短SQLTransaction提交，才可開始Step。
+SQL結果／History／checkpoint／terminalJob/Run／Primaryaggregate同交易；通知在commit後best-effort，不新增Outbox，不為通知失敗重跑分析。
+RuntimePending每5秒、每批100，Geo15秒／其他Step120秒／shutdown30秒皆是可設定MVP預設，未效能驗證。Enqueue5秒僅MOD-02補排程，MOD-01Upload不變。
+PrimaryJob為原UploadJob；secondary不改TotalCount=圖片數與既有Query。FailedRetry後仍有其他終態圖片則BatchProcessing，只有全部PrimaryPending才Pending；未知binding先阻擋相關執行。
+共用執行Schema見 `docs/Database-Schema.md` §3～§6，原子順序／Run與checkpoint狀態機／crash-window見MOD-02 §1.18～§1.22。Completed重新分析仍待決策。
+
+---
+
 # 1.34 Development Infrastructure
 
 Development Baseline：
@@ -1851,6 +1890,15 @@ System-Level 只定義：
 
 ---
 
+## 共用 Schema ownership 與交接
+
+已核准：`docs/Database-Schema.md` 管理 physical mapping；MOD-02 擁有 Job／Log 業務語意，MOD-09 擁有查詢契約，其他模組依其 Module Boundary 管理自身結果。
+共用 Schema 的已確認部分承接 MOD-01 Spec 與 feature Mapping；未確認欄位／新表／索引／版本必須明列，不因本文核准 ownership 而自動核准其設計。
+ProcessingLog Id 原則 BIGINT；本次未找到 feature 的 Log Entity／Migration，實際資料庫未驗證。若已有 GUID 或其他映射，先回報遷移影響，不直接改 MOD-01 或執行 Migration。
+MOD-01 feature 尚未合併，TASK-11／12 最新驗收待確認。不得把 feature 程式直接宣稱為 develop 實作，也不得將 TASK-10 歷史 261/261 延用為 TASK-12 PASS。
+
+---
+
 # 2.2 Core Data Entities
 
 MVP 核心資料概念包含：
@@ -2038,6 +2086,14 @@ SignalR 不取代 REST API。
 | MOD-10 Export | CSV Export |
 
 具體 Endpoint、Request、Response、Error Code 由 Module Specification 定義。
+
+---
+
+## MOD-02 重複 CreateJob 與 Retry
+
+相同 ImageId／Workflow 的 Job 已存在，不論 Pending／Processing／Completed／Failed，CreateJob 均回傳 409／PROCESSING_JOB_ALREADY_EXISTS，共用 error.traceId envelope，沒有新增、Enqueue 或重設副作用。
+人工 Retry 使用既有 Job，僅 Failed 且 transient 資格通過可 Failed → Pending，保留全部 attempt history；其餘回傳 409／INVALID_STATE_TRANSITION。
+重新分析／改參數／改版本不是 Retry，另行待決策。MOD-01 Upload error mapping 不受此新 Processing API 契約改寫。
 
 ---
 
@@ -2692,3 +2748,28 @@ Wait for Approval
 ```
 
 不得自行修改 Architecture Contract。
+
+# 最終文件審核契約 — F-01～F-08
+
+本章依最新使用者核准與補充生效，取代先前同題待決文字；仍只有規格授權。
+- 單Instance、多Worker/SQLClaim、舊程序確認停止才Recovery；單部署/DB/Storage單管理者確認集合，非技術隔離，不支持Auth/多租戶。
+- MOD03獨立Metadata與provenance；可信EXIF須offset，fallback UploadCreatedAt不計原始completeness；Orientation只分析視圖；MissingGPS Skip/InvalidGPS Warning/Geo耗盡Warning/auth-config Permanent Failed。
+- MOD04獨立read/artifact abstraction、持久input/固定Sequence/OperationId/Create/Inspect/no-overwrite；原檔及StoredPath不變，禁止未核准cleanup/reapply。
+- MOD05 versioned SHA256/EXACT uniqueness；MOD06 versioned pHash/true edge/single-link；MOD07独立Quality；MOD08 snapshot Recommendation，不各自重試/寫History。
+- similarity暫定可設定1000/50000edges/比較gate2，只存>=0.85 edges，超限Permanent Failed且不發布部分正式snapshot；低threshold Query同版本hash唯讀完整最多999計算、有界pageSize100/2秒timeout，無補hash/寫資料。
+- Run/Checkpoint/History/結果按T1～T5/T2-W原子提交，commit後通知。VERSION_ANALYSIS依賴等待120秒可設定且持久start/deadline、重啟不重設；等待與Running互斥。
+
+| Workflow | 凍結Step列表 |
+|---|---|
+| Naming | EXIF_PARSING→GEO_LOOKUP→NAMING→FILE_RENAME（artifact） |
+| DuplicateDetection | SHA256_CALCULATION→EXACT_DUPLICATE_CHECK |
+| Analysis | EXIF_PARSING→GEO_LOOKUP→SHA256_CALCULATION→EXACT_DUPLICATE_CHECK→PHASH_GENERATION→VISUAL_SIMILARITY→QUALITY_ANALYSIS→VERSION_ANALYSIS（Recommendation） |
+| Full | Analysis→NAMING→FILE_RENAME |
+
+workflow-mvp-v1；VALIDATION只准入、COMPLETED只lifecycle。各Step input/versions/Skip/Outcome依MOD02～08最終章。MOD02核心文件層可TASK規劃，完整Analysis/Full尚需解碼/ICC引擎與精確版本N-01及候選就緒调度N-02；算法/跨平台/容量與SQLcrash均待後續驗收。MOD01 feature尚未合併/驗收待核對，不將後續缺adapter判MOD01失敗，不改其文件/TASK/mapping。
+D-13只延後新Export能力，完整原規格保留；MOD10未通過完整實作准入。不因Export或進階Monitoring未定阻擋全部MOD02核心。本輪不建TASK/實作/遷移，不checkout/commit/push/merge，停文件審核。
+
+## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
+
+正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。
+這是規格缺口而非已證實runtime deadlock。保持Analysis/Full完整實作准入BLOCKED，核心TASK規劃與Naming不因本缺口阻擋。推薦下一次針對N-02核准把VISUAL候選等待納入既有T2-W（讓出Worker、持久deadline、版本核對、無Running/不消耗Retry、ready後原子開始）；VISUAL等待budget與逾時政策需集中決定，不能擅自挪用Recommendation120秒或改Step順序。本輪不實作、不建立TASK、不改已核准checkpoint wait範圍。

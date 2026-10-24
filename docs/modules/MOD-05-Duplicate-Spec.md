@@ -1,7 +1,13 @@
 # Duplicate Module Specification
 
+> **規格修訂草稿（2026-10-12）**：以 develop `8ff1dd983af2ffa68dfc93893f9cca61fadb2c90` 為基準。
+> MOD-01 feature `a1bb29e1d7cf704a202adbe1c14741b6441575be` 僅為交接證據，未合併進 develop。
+> 已核准與待決策內容分開記錄於 [規格審閱與決策紀錄](../reviews/Specification-Revision-Review.md)。
+> F-01～F-08已核准並同步至最終契約章；同題舊待決文字由最終章取代。引擎/精確版本N-01與實作驗收仍未完成；不是TASK、實作或PASS授權。
+
+
 **文件名稱：** Duplicate Module Specification  
-**模組編號：** MOD-03  
+**模組編號：** MOD-05
 **模組名稱：** Duplicate Module  
 **中文名稱：** 重複照片偵測模組  
 **文件版本：** V2.0  
@@ -170,7 +176,7 @@ Size Different?
 
 目的：
 
-> 先使用成本較低的 File Size 篩選候選檔案，再進行 SHA-256 計算，以降低不必要的 Hash 計算成本。
+> 先為本Workflow圖片完整計算並保存SHA256，即使沒有同size候選；FileSize只縮小EXACT比較候選，不取消hash，以支持晚到候選。
 
 ---
 
@@ -193,7 +199,7 @@ Original File Binary Content
 例如：
 
 ```text
-A3F1...9C20
+a3f1...9c20
 ```
 
 ### 效能要求
@@ -311,7 +317,7 @@ VISUAL
 VERSION
 ```
 
-但 MVP 僅實作：
+但本模組的 MVP 僅實作：
 
 ```text
 EXACT
@@ -334,7 +340,7 @@ VERSION
 ```
 
 > **Agent Rule：**
-> MVP 不得提前實作 Visual Similarity 或 Version Recommendation。
+> MOD-05 不實作 Visual Similarity 或 Version Recommendation；系統 MVP 的這些能力由 MOD-06／MOD-08 負責。
 
 ---
 
@@ -525,9 +531,7 @@ File Not Found
     ↓
 ProcessingLog
     ↓
-Processing Failed
-    ↓
-Retry / Recovery
+Processing Failed（永久不存在不 Retry；中斷 Job 由 MOD-02 Recovery）
 ```
 
 ### Storage Temporary Failure
@@ -547,11 +551,9 @@ Processing Failed
 ```text
 SHA256 Failed
     ↓
-ProcessingLog
+安全分類／ProcessingLog
     ↓
-Retry
-    ↓
-Failed
+只有 transient 交由 MOD-02 Retry；永久錯誤 Failed
 ```
 
 ---
@@ -595,7 +597,7 @@ Duplicate Module 必須記錄重要 Processing Step。
 使用：
 
 ```text
-HASH_CALCULATION
+SHA256_CALCULATION
 EXACT_DUPLICATE_CHECK
 ```
 
@@ -603,7 +605,7 @@ EXACT_DUPLICATE_CHECK
 
 ```text
 ImageId = 101
-Step = HASH_CALCULATION
+Step = SHA256_CALCULATION
 Status = Success
 DurationMs = 120
 ```
@@ -690,7 +692,7 @@ AGENTS.md
     ↓
 System-Level Specification
     ↓
-Database-Schema.md
+docs/Database-Schema.md
     ↓
 Duplicate Module Specification
     ↓
@@ -736,6 +738,37 @@ Agent 不得自行選擇一個規則覆蓋另一個規則。
 
 ---
 
+## 與 MOD-02 的已核准執行契約
+
+- MVP 單 Instance、多 Worker，MOD-02 以 SQL Server 原子 Claim 取得 Job 執行權；本模組不建立 Queue、Worker 或平行重試排程器。
+- 每Run的每個transient Step由MOD-02管理四個邏輯槽位0～3，重試等待1／2／4秒；Shutdown Resume沿用槽位而另記invocation，本模組不疊加retry loop。
+- host shutdown cancellation 向上傳播、不算 Retry；中斷由 MOD-02 處理，不能偽裝成 module failure 或 fallback。已提交成功結果需核對可重用性，不重做副作用。
+- Job Status、Step Result、Log Status 不混用；失敗由 MOD-02 協調持久化 Job transition，本模組不直接改其 enum。
+- D-05／D-06已核准MOD-02單一History writer、Run／checkpoint／invocation、提交後best-effort事件；Step從checkpoint映射、Timestamp為Log建立時間，schema見共用文件§3～§6。子模組回報Outcome，不重複寫History。
+- 保留每次 attempt History，重要 operation 安全保留 JobId／ImageId／TraceId；沿用 ILogger<T>，不輸出 raw exception／SQL／path／secrets，不重複 MOD-01 failure event。
+- 本模組的新增契約缺口與決策選項見 `docs/reviews/Specification-Revision-Review.md`；未決事項不能以一般實作細節自行補足。
+
+
+### MOD-05 獨立審閱缺口（未核准）
+
+- M05-01／Major：§1.8 要求同 hash 只一個 EXACT Group，但 §2.3 只有 Id／GroupType／CreatedAt，缺少可持久化的 FileSize+SHA256 group key 與唯一策略。GroupMember unique 不能解決 Group creation race；見 D-10。
+- M05-02／Major：§1.5 避免無候選 hash 計算，但查詢 NotReady／NoDuplicate 與後續新候選加入需要完成證據／補比對策略；不能以 SHA256 null 當已完成或 group absence 當未完成。候選範圍、完成／更新語意待 D-10。
+- M05-03／Minor：SHA256 64-character hex 大小寫／比較正規化未定，不能依 DB default collation 猜測。
+- M05-04／Major：Read Stream／lifetime 與完整 IHashService signature 未接上既有 Storage Save／Delete，見 D-09；候選可讀取範圍需同 D-10，不能默認全庫或 Batch-only。
+
+已確認 Step 名稱統一為 SHA256_CALCULATION／EXACT_DUPLICATE_CHECK；永久 FileNotFound 不 Retry，Hash error 先分類，Job Recovery 不等於修復缺失檔案。
+新增驗收：同 key concurrent group creation、晚到候選、NoDuplicate completion 與 NotReady 區分、無候選之後有候選、Hash encoding 正規化；期待結果待 D-10，不標記 PASS。
+
+---
+
+### D-05～D-07 同步限制
+
+只有binding／版本／Context可確認且T1／T2已原子提交Running Log後才開始本模組。結果／History保存重試不重做模組操作，也不消耗business retry budget。
+程序在T3前中斷時memory可能遺失；只讀計算需可重現Input／RuleVersion才能安全重算；已有SQL／Group／Storage副作用先核對，不因未保存checkpoint盲目重做。
+Unknown副作用／Context先阻擋。PrimaryJob才更新Image／BatchStatus，secondary不改Uploadaggregate。F-01～F-08的結果/版本/receipt已同步最終章；Analysis/Full尚有N-01/N-02，實作與驗收未完成。
+
+---
+
 # 2. 資料表
 
 ## 2.1 使用的資料表
@@ -747,6 +780,15 @@ Images
 DuplicateGroups
 DuplicateGroupMembers
 ```
+
+---
+
+## 共用 Schema 與交接基線
+
+physical mapping 以 `docs/Database-Schema.md` 已確認部分為共同依據；尚未定案的欄位、索引與關係明列為待決策，不假設不存在的原始 Database-Schema.md 已提供答案。
+沿用 MOD-01 Image.Id BIGINT、BatchId uniqueidentifier、DateTimeOffset／datetimeoffset(7) 與 Unicode mapping。
+SQL Server timestamp／rowversion 不是日期時間；日期不得以 TIMESTAMP mapping 實作。
+MOD-01 feature 尚未合併；TASK-11／12 最新驗收維持待確認，不能把後續模組未完成判作 MOD-01 Backend 缺陷。
 
 ---
 
@@ -772,7 +814,7 @@ INDEX IX_Images_SHA256
 實際資料型別依：
 
 ```text
-Database-Schema.md
+docs/Database-Schema.md
 ```
 
 為準。
@@ -793,7 +835,7 @@ MVP：
 GroupType = EXACT
 ```
 
-未來可支援：
+其他模組可使用的 GroupType（MOD-05 不負責）：
 
 ```text
 EXACT
@@ -932,13 +974,13 @@ None
         "imageId": 205,
         "fileName": "IMG_001_copy.jpg",
         "fileSize": 5242880,
-        "sha256": "A3F1...9C20"
+        "sha256": "a3f1...9c20"
       },
       {
         "imageId": 309,
         "fileName": "backup_IMG_001.jpg",
         "fileSize": 5242880,
-        "sha256": "A3F1...9C20"
+        "sha256": "a3f1...9c20"
       }
     ]
   }
@@ -1536,7 +1578,7 @@ traceId
 ### Database
 
 - [ ] Images SHA-256 Index
-- [ ] File Size Index
+- [ ] File Size Index 需求經 Schema 決策確認（建議項目，不視為已核准新增）
 - [ ] DuplicateGroups
 - [ ] DuplicateGroupMembers
 - [ ] PK / FK
@@ -1611,3 +1653,10 @@ Review
 ```
 
 只有所有必要項目完成，Duplicate Module 才視為完成。
+
+# 最終核准契約 — F-03（EXACT與hash結果）
+
+單部署/DB/Storage單管理者確認集合，非技術隔離，不支持多owner/tenant。同集合跨Batch才可候選，unique EXACT(FileSize,SHA256)依此部署前提成立。
+本Workflow圖片完整SHA256，無候選也計算，取代舊無同size才不hash的優化。64字元小寫hex/ordinal，版本化hash唯一(ImageId,ContentVersion,HashRuleVersion)，ContentVersion由原始內容核對；獨立Pending/Processing/Completed/Failed，Images.SHA256只是Primary相容投影，不改mapping。HashRuleVersion/NoMatch/candidate版本結果authority，不以null/group不存在當已完成。
+group/member唯一與DBtransaction處理並行race；member UNIQUE(GroupId,ImageId)，單content可重用versionhash，候選晚到建立新membership snapshot，不覆寫舊CompletedJob/History。SHA256與FileSize只判EXACT，不冒充pHash/VISUAL，也不自動刪圖。
+Application只協調，Infrastructure透過獨立reader，NoMatch有明確已分析證據。缺檔/損壞/不支持永久錯誤，不Retry；transient由MOD02四槽位，不內部重試。T3保存result/group/reference/checkpoint/History同commit，commit不明先核DB。
