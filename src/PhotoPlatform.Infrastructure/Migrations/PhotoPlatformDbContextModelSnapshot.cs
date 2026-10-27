@@ -167,6 +167,47 @@ namespace PhotoPlatform.Infrastructure.Migrations
                     b.ToTable("images", (string)null);
                 });
 
+            modelBuilder.Entity("PhotoPlatform.Domain.Entities.ImageProcessingBinding", b =>
+                {
+                    b.Property<long>("ImageId")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("BatchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<long>("PrimaryJobId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("PrimaryStatus")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(30)");
+
+                    b.Property<string>("PrimaryWorkflow")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(30)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.HasKey("ImageId");
+
+                    b.HasIndex("BatchId");
+
+                    b.HasIndex("PrimaryJobId")
+                        .IsUnique();
+
+                    b.ToTable("image_processing_bindings", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_image_processing_bindings_PrimaryStatus", "[PrimaryStatus] IN ('Pending', 'Processing', 'Completed', 'Failed')");
+
+                            t.HasCheckConstraint("CK_image_processing_bindings_PrimaryWorkflow", "[PrimaryWorkflow] IN ('Naming', 'Analysis', 'DuplicateDetection', 'Full')");
+                        });
+                });
+
             modelBuilder.Entity("PhotoPlatform.Domain.Entities.ProcessingJob", b =>
                 {
                     b.Property<long>("Id")
@@ -229,11 +270,293 @@ namespace PhotoPlatform.Infrastructure.Migrations
                     b.ToTable("processing_jobs", (string)null);
                 });
 
+            modelBuilder.Entity("PhotoPlatform.Domain.Entities.ProcessingLog", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("AttemptNo")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<long?>("DurationMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(50)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<long>("ImageId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("JobId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("ResumeNo")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RetryOrdinal")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<long>("StepCheckpointId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("Timestamp")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<string>("TraceId")
+                        .HasMaxLength(100)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StepCheckpointId")
+                        .IsUnique()
+                        .HasFilter("[Status] = 'Running'");
+
+                    b.HasIndex("StepCheckpointId", "AttemptNo")
+                        .IsUnique();
+
+                    b.HasIndex("ImageId", "Timestamp", "Id")
+                        .IsDescending(false, true, true);
+
+                    b.HasIndex("JobId", "Timestamp", "Id")
+                        .IsDescending(false, true, true);
+
+                    b.HasIndex("StepCheckpointId", "RetryOrdinal", "ResumeNo")
+                        .IsUnique();
+
+                    b.ToTable("processing_logs", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_processing_logs_AttemptNo", "[AttemptNo] > 0");
+
+                            t.HasCheckConstraint("CK_processing_logs_DurationMs", "[DurationMs] IS NULL OR [DurationMs] >= 0");
+
+                            t.HasCheckConstraint("CK_processing_logs_ResumeNo", "[ResumeNo] >= 0");
+
+                            t.HasCheckConstraint("CK_processing_logs_RetryOrdinal", "[RetryOrdinal] BETWEEN 0 AND 3");
+
+                            t.HasCheckConstraint("CK_processing_logs_Status", "[Status] IN ('Running', 'Success', 'Warning', 'Failed', 'Interrupted', 'Skipped')");
+                        });
+                });
+
+            modelBuilder.Entity("PhotoPlatform.Domain.Entities.ProcessingRun", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<long>("JobId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<int>("RunNo")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("StartedAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<string>("TraceId")
+                        .HasMaxLength(100)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("WorkflowVersion")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(50)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("JobId")
+                        .IsUnique()
+                        .HasFilter("[Status] IN ('Pending', 'Active')");
+
+                    b.HasIndex("JobId", "RunNo")
+                        .IsUnique();
+
+                    b.ToTable("processing_runs", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_processing_runs_Reason", "([Reason] = 'Initial' AND [RunNo] = 1) OR ([Reason] = 'ManualRetry' AND [RunNo] BETWEEN 2 AND 4)");
+
+                            t.HasCheckConstraint("CK_processing_runs_RunNo", "[RunNo] BETWEEN 1 AND 4");
+
+                            t.HasCheckConstraint("CK_processing_runs_Status", "[Status] IN ('Pending', 'Active', 'Completed', 'Failed')");
+                        });
+                });
+
+            modelBuilder.Entity("PhotoPlatform.Domain.Entities.ProcessingStepCheckpoint", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<DateTimeOffset?>("DependencyWaitDeadlineAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<DateTimeOffset?>("DependencyWaitStartedAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<string>("DependencyWaitStatus")
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<string>("ErrorClassification")
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(50)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("InputFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<DateTimeOffset?>("NextRetryAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<string>("ResultReference")
+                        .HasMaxLength(500)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<string>("ResultStatus")
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<int>("RetryOrdinal")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<string>("RuleVersion")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<long>("RunId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset?>("StartedAt")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<string>("Step")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<int>("StepOrder")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId", "Step")
+                        .IsUnique();
+
+                    b.HasIndex("RunId", "StepOrder")
+                        .IsUnique();
+
+                    b.ToTable("processing_step_checkpoints", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_processing_step_checkpoints_DependencyWait", "([DependencyWaitStartedAt] IS NULL AND [DependencyWaitDeadlineAt] IS NULL AND [DependencyWaitStatus] IS NULL)\nOR ([DependencyWaitStartedAt] IS NOT NULL AND [DependencyWaitDeadlineAt] IS NOT NULL\n    AND [DependencyWaitStatus] IS NOT NULL AND [DependencyWaitDeadlineAt] > [DependencyWaitStartedAt]\n    AND [DependencyWaitStatus] IN ('Waiting', 'Resolved', 'Expired')\n    AND [Step] = 'VERSION_ANALYSIS'\n    AND ([DependencyWaitStatus] <> 'Waiting' OR [Status] = 'Pending'))");
+
+                            t.HasCheckConstraint("CK_processing_step_checkpoints_ErrorClassification", "[ErrorClassification] IS NULL OR [ErrorClassification] IN ('Transient', 'Permanent')");
+
+                            t.HasCheckConstraint("CK_processing_step_checkpoints_ResultStatus", "[ResultStatus] IS NULL OR [ResultStatus] IN ('Success', 'Warning', 'Skipped')");
+
+                            t.HasCheckConstraint("CK_processing_step_checkpoints_RetryOrdinal", "[RetryOrdinal] BETWEEN 0 AND 3");
+
+                            t.HasCheckConstraint("CK_processing_step_checkpoints_Status", "[Status] IN ('Pending', 'Processing', 'RetryWaiting', 'Completed', 'Failed')");
+
+                            t.HasCheckConstraint("CK_processing_step_checkpoints_StepOrder", "[StepOrder] > 0");
+                        });
+                });
+
             modelBuilder.Entity("PhotoPlatform.Domain.Entities.Image", b =>
                 {
                     b.HasOne("PhotoPlatform.Domain.Entities.Batch", null)
                         .WithMany()
                         .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PhotoPlatform.Domain.Entities.ImageProcessingBinding", b =>
+                {
+                    b.HasOne("PhotoPlatform.Domain.Entities.Batch", null)
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("PhotoPlatform.Domain.Entities.Image", null)
+                        .WithMany()
+                        .HasForeignKey("ImageId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("PhotoPlatform.Domain.Entities.ProcessingJob", null)
+                        .WithMany()
+                        .HasForeignKey("PrimaryJobId")
                         .OnDelete(DeleteBehavior.NoAction)
                         .IsRequired();
                 });
@@ -249,6 +572,45 @@ namespace PhotoPlatform.Infrastructure.Migrations
                     b.HasOne("PhotoPlatform.Domain.Entities.Image", null)
                         .WithMany()
                         .HasForeignKey("ImageId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PhotoPlatform.Domain.Entities.ProcessingLog", b =>
+                {
+                    b.HasOne("PhotoPlatform.Domain.Entities.Image", null)
+                        .WithMany()
+                        .HasForeignKey("ImageId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("PhotoPlatform.Domain.Entities.ProcessingJob", null)
+                        .WithMany()
+                        .HasForeignKey("JobId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("PhotoPlatform.Domain.Entities.ProcessingStepCheckpoint", null)
+                        .WithMany()
+                        .HasForeignKey("StepCheckpointId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PhotoPlatform.Domain.Entities.ProcessingRun", b =>
+                {
+                    b.HasOne("PhotoPlatform.Domain.Entities.ProcessingJob", null)
+                        .WithMany()
+                        .HasForeignKey("JobId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PhotoPlatform.Domain.Entities.ProcessingStepCheckpoint", b =>
+                {
+                    b.HasOne("PhotoPlatform.Domain.Entities.ProcessingRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
                         .OnDelete(DeleteBehavior.NoAction)
                         .IsRequired();
                 });

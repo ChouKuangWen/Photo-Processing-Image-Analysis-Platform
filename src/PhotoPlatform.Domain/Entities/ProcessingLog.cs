@@ -3,12 +3,16 @@ using PhotoPlatform.Domain.Policies;
 
 namespace PhotoPlatform.Domain.Entities;
 
-/// <summary>
-/// 記錄單一 Checkpoint 的一次 invocation；恢復另建 Log，不覆寫舊紀錄。
-/// Timestamp 固定為建立時的開始時間，與終態寫入時間分離。
-/// </summary>
+// 記錄某個處理步驟的一次執行；恢復執行時另建一筆，不覆蓋舊紀錄。
+// Timestamp 保留最初開始的時間，不能在結束時改掉，以免歷史排序跟著變動。
+
 public sealed class ProcessingLog
 {
+    // 這個私有建構子讓 EF Core 讀回既有資料；外部程式仍須使用公開建構子，不能跳過輸入驗證。
+    private ProcessingLog()
+    {
+    }
+
     public ProcessingLog(long stepCheckpointId, long jobId, long imageId,
         ProcessingAttemptIdentity attempt, DateTimeOffset startedAt, string? traceId = null)
     {
@@ -46,10 +50,10 @@ public sealed class ProcessingLog
     public DateTimeOffset Timestamp { get; private set; }
     public string? TraceId { get; private set; }
 
-    /// <summary>
-    /// 將 Running 紀錄一次性轉為終態，保留原始開始時間與 Timestamp。
-    /// 無法量測的耗時應傳入 null，不以零假裝已量測；錯誤內容須由呼叫端提供安全訊息。
-    /// </summary>
+
+    // 只有還在 Running 的紀錄可以結束一次；已結束的紀錄不能再改寫，開始時間與 Timestamp 也要保留。
+    // 不知道耗時就傳入 null，不能用零代替；呼叫端提供的錯誤訊息不能包含密碼等敏感內容。
+
     public void Finish(ProcessingLogStatus terminalStatus, DateTimeOffset completedAt,
         long? durationMs, string? errorCode = null, string? errorMessage = null)
     {

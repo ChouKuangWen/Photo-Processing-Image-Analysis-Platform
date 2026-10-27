@@ -465,15 +465,21 @@ public sealed class UploadPersistenceTests : IAsyncLifetime
     {
         // 測試目標：確認 Migration 在 SQL Server 實際建立核准的資料表、欄位、索引與約束。
         await using var db = CreateContext();
-        Assert.Single(await db.Database.GetAppliedMigrationsAsync());
+        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
+        Assert.Equal(2, migrations.Length);
+        Assert.Equal("20260917025957_InitialUploadPersistence", migrations[0]);
+        Assert.EndsWith("_AddProcessingExecutionPersistence", migrations[1]);
         Assert.Empty(await db.Database.GetPendingMigrationsAsync());
         Assert.False(db.Database.HasPendingModelChanges());
         var tables = await db.Database.SqlQueryRaw<string>("SELECT name AS [Value] FROM sys.tables WHERE name <> '__EFMigrationsHistory' ORDER BY name").ToListAsync();
-        Assert.Equal(new[] { "batches", "images", "processing_jobs" }, tables);
+        Assert.Equal(new[] { "batches", "image_processing_bindings", "images", "processing_jobs", "processing_logs", "processing_runs", "processing_step_checkpoints" }, tables);
         var actions = await db.Database.SqlQueryRaw<int>("SELECT CONVERT(int, delete_referential_action) AS [Value] FROM sys.foreign_keys").ToListAsync();
-        Assert.Equal(3, actions.Count);
+        Assert.Equal(11, actions.Count);
         // SQL Server 系統目錄以 0 表示 NoAction。
         Assert.All(actions, action => Assert.Equal(0, action));
+        // 全庫規模擴充，但 Upload 原三表仍保留原本三條 FK 與各自的欄位、索引、預設值契約。
+        Assert.Equal(3, await db.Database.SqlQueryRaw<int>(
+            "SELECT COUNT(*) AS [Value] FROM sys.foreign_keys WHERE parent_object_id IN (OBJECT_ID('batches'), OBJECT_ID('images'), OBJECT_ID('processing_jobs'))").SingleAsync());
         Assert.Equal(38, await db.Database.SqlQueryRaw<int>(
             "SELECT COUNT(*) AS [Value] FROM sys.columns WHERE object_id IN (OBJECT_ID('batches'), OBJECT_ID('images'), OBJECT_ID('processing_jobs'))").SingleAsync());
         Assert.Equal(9, await db.Database.SqlQueryRaw<int>(
