@@ -158,6 +158,8 @@ internal sealed class UploadFaultInjection
             if (owner.FailAt == "save2")
                 inner.AddProcessingJobs([new(jobs[0].ImageId, jobs[0].BatchId, jobs[0].Workflow, jobs[0].CreatedAt)]);
         }
+        public void AddImageProcessingBindings(IReadOnlyList<ImageProcessingBinding> bindings)
+            => inner.AddImageProcessingBindings(bindings);
         // 真正執行 SaveChanges；若 SQL Server 回傳錯誤，保存為本次 Primary exception。
         // Save 成功後也可在指定 stage 暫停，供 cancellation / concurrency 測試。
         public async Task SaveChangesAsync(CancellationToken token)

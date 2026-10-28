@@ -61,6 +61,7 @@
 - 新增 Infrastructure/Persistence/ProcessingBindingPersistence.cs
 - 新增 Domain/Policies/PrimaryAggregatePolicy.cs；必要時擴充 Batch.cs、Image.cs 的受控投影行為
 - 新增 UnitTests/Processing/PrimaryBindingTests.cs 與 IntegrationTests/Processing/PrimaryBindingPersistenceTests.cs
+- F-03-01 例外：修改 UploadService.cs、IUploadPersistence.cs、UploadPersistence.cs，以及直接受影響的 Upload Unit／Persistence／Acceptance Tests 與測試替身；不修改原三表 Mapping 或 Migration。
 
 路徑縮寫約定：Domain/Application/Infrastructure/API 分別位於 `src/PhotoPlatform.Domain`、`src/PhotoPlatform.Application`、`src/PhotoPlatform.Infrastructure`、`src/PhotoPlatform.Api`；
 UnitTests/IntegrationTests 位於 `tests/PhotoPlatform.UnitTests`、`tests/PhotoPlatform.IntegrationTests`。新增／修改只限核准 Scope，不要求無理由搬移既有檔案。
@@ -71,7 +72,8 @@ Domain 計算已確認狀態的貢獻規則；Application 協調交接核對；I
 
 ## 7. Implementation Requirements
 
-1. 原 Upload Job 的 Workflow 可為四種之一，不強制 Full。只有唯一且交接證據可核對的原 Job 才可建立 binding；不得按最早時間／最小 Id 猜測。
+1. F-03-01 核准：原 Upload Job 的 Workflow 可為四種之一，不強制 Full。新 Upload 在原 SQL Transaction 內依序 Save Batch／Images、Save Jobs 取得 Id、直接從本次 Jobs 建立並 Save Bindings、Commit、Enqueue。允許最小修改 UploadService／IUploadPersistence／UploadPersistence 與測試；Binding 加入 tracked 清理集合，沿用 Commit 前回滾／Storage 補償與 Commit 後資料保留規則。
+   持久 Binding 是原始身分證據；歷史缺 Binding 一律阻擋，不查候選猜測、不 backfill、不手動選主。Assessment 不建立 Binding；既有 Binding 仍須完整核對。
 2. Binding 建立須核對 Job.ImageId／BatchId／Workflow 與 Image.BatchId；PrimaryJobId／Workflow 綁定後不因 secondary／Retry 改變。
 3. Primary Claim／恢復／aggregate 更新前，在相關短交易核對該 Batch 全部接受 Image 的完整 binding 集合及計數。不能以記憶體 ready flag 或只取前100筆理由替代完整核對。
 4. 新增 Image 使先前集合確認不再足夠。未知 binding 的 Image 所有 Job 不執行；整個 Batch 的 Primary 阻擋，但已確認其他 Batch 繼續；已確認 secondary 不額外套全 Batch aggregate 門檻。
@@ -103,6 +105,7 @@ T4 僅安全 Startup Recovery；T5 僅人工 Retry。T2-W 僅核准的 VERSION_A
 
 - 各 Primary 狀態 delta、重複完成、Failed Retry、secondary、空 Batch、全失敗／混合成功。
 - 多候選、不一致、缺證據不能選主；既有 Query 計算契約不變。
+- 核對三次 Save 的順序、第三次 Save 失敗與取消時的回滾／補償，Commit 後 Queue 失敗不得撤銷 Binding。
 
 測試名稱需表達 Given/When/Expected 行為；覆蓋成功、拒絕、邊界及適用的取消。不用真實 SQL、外部 API 或 GCS 作 Unit Test 前提。
 
@@ -111,6 +114,7 @@ T4 僅安全 Startup Recovery；T5 僅人工 Retry。T2-W 僅核准的 VERSION_A
 - 真實 SQL Server 驗證併發 binding 建立不選出兩個主 Job。
 - 核對完整集合；新增 Image 後舊確認不能繼續放行；錯關聯／計數矛盾阻擋，其他 Batch 不受影響。
 - 唯讀 assessment 前後資料不變；所有 aggregate 寫入整合留 TASK-05～08 再驗證。
+- 四種 Workflow 經真正 Upload 交易建立 Binding；Binding 寫入失敗時四表一起回滾，DbContext 清理後重用不殘留 Binding；新 Upload 來源不使用歷史候選推測。
 
 涉及 SQL Claim、unique、transaction、Migration、並行與持久恢復的驗收，必須使用真正 SQL Server，禁止 EF Core InMemory 替代。
 執行前核對隔離 Connection String 來源、生成測試 DB/Storage 範圍與清理目標，不輸出秘密；環境問題依 sqlserver-integration-test skill，不藉改 production code 繞過。
@@ -142,7 +146,7 @@ Binding／准入／aggregate policy 與測試一組；feat(mod-02): establish pr
 
 ## 15. Out of Scope
 
-重新設計 Upload、全庫 backfill／修復、第二套 Batch Query、獨立提交 aggregate、變更 TotalCount。
+重新設計 Upload（僅允許 §7 核准的同交易 Binding 整合例外）、全庫 backfill／修復、第二套 Batch Query、獨立提交 aggregate、變更 TotalCount。不得新增 Migration、資料表、NuGet 或 API。
 
 本 TASK 不授權修改正式規格、重新全面 Review MOD-01、開始其他 TASK 或自行決定 N-01/N-02。既有 Pkcs 安全警告仍屬正式部署／公開服務前必須處理的技術債，本 TASK 不擴大安全審查或自行升級。
 

@@ -321,15 +321,17 @@ public sealed class UploadPersistenceTests : IAsyncLifetime
         public ValueTask<ProcessingJob> DequeueAsync(CancellationToken token) => throw new NotSupportedException();
     }
 
-    // 使用真實 SQL Server 驗證 Commit 前失敗會 Rollback，並只補償本次 Upload 的新檔案；既有 DB 資料與檔案不得受影響。
-    // Rollback 後也必須 Detach 新增 Entity，避免之後 SaveChanges 又重新寫入。
+    // 測試目的：確認 Commit 前失敗會一起撤銷本次 Upload，保留既有資料。
+    // 測試情境：在各次 Save 或 Commit 注入錯誤，包含重複 Binding。
+    // 預期結果：四表新增資料回滾、檔案補償，重用 DbContext 不會重新寫入 Binding。
     [Theory]
     [InlineData("save1", UploadFailureStage.DatabaseSave)]
     [InlineData("save2", UploadFailureStage.DatabaseSave)]
+    [InlineData("save3", UploadFailureStage.DatabaseSave)]
     [InlineData("commit", UploadFailureStage.DatabaseCommit)]
     public async Task UploadFailure_RealSqlRollbackCompensatesOnlyNewFiles(string failureAt, UploadFailureStage expectedStage)
     {
-        // 真實 SQL constraint failure（或 Commit 前注入失敗）必須撤銷兩階段寫入，且不影響既有資料 / 檔案。
+        // SQL 寫入或 Commit 前失敗必須撤銷三次寫入，且不影響既有資料與檔案。
         await using var db = CreateContext();
         var existing = new Batch(Guid.NewGuid(), 0, CreatedAt);
         db.Batches.Add(existing);
@@ -360,12 +362,14 @@ public sealed class UploadPersistenceTests : IAsyncLifetime
         Assert.Equal(existing.Id, (await read.Batches.SingleAsync()).Id);
         Assert.Empty(await read.Images.ToListAsync());
         Assert.Empty(await read.ProcessingJobs.ToListAsync());
+        Assert.Empty(await read.ImageProcessingBindings.ToListAsync());
         Assert.Equal(Path.Combine(_storageRoot, oldPath.Replace('/', Path.DirectorySeparatorChar)),
             Assert.Single(Directory.GetFiles(Path.Combine(_storageRoot, "original"))));
     }
 
-    // 驗證 Commit 已真正完成後才進入 Queue。
-    // 即使第一筆或部分 Enqueue 失敗，已 Commit 的 Batch / Image / Job與 Storage 檔案都必須保留，不得 Rollback 或 Compensation。
+    // 測試目的：確認入列失敗不會撤銷已接受的 Upload 與 Binding。
+    // 測試情境：正常入列、第一筆失敗、第二筆失敗，從另一個 Context 查資料。
+    // 預期結果：Binding 在入列前已存在，資料和原圖全部保留，不回滾。
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
@@ -381,6 +385,7 @@ public sealed class UploadPersistenceTests : IAsyncLifetime
         {
             await using var read = CreateContext();
             Assert.True(await read.ProcessingJobs.AnyAsync(x => x.Id == job.Id, token));
+            Assert.True(await read.ImageProcessingBindings.AnyAsync(x => x.PrimaryJobId == job.Id, token));
             if (++calls == failOnEnqueue) throw primary;
         });
         var persistence = new FaultingPersistence(new UploadPersistence(db), null);
@@ -403,6 +408,7 @@ public sealed class UploadPersistenceTests : IAsyncLifetime
         Assert.Equal(1, await verification.Batches.CountAsync());
         Assert.Equal(2, await verification.Images.CountAsync());
         Assert.Equal(2, await verification.ProcessingJobs.CountAsync());
+        Assert.Equal(2, await verification.ImageProcessingBindings.CountAsync());
         Assert.Equal(2, Directory.GetFiles(Path.Combine(_storageRoot, "original")).Length);
         foreach (var image in await verification.Images.ToListAsync())
             Assert.Equal(new byte[] { 0xff, 0xd8, 0xff }, await File.ReadAllBytesAsync(
@@ -436,6 +442,16 @@ public sealed class UploadPersistenceTests : IAsyncLifetime
             inner.AddProcessingJobs(jobs);
             if (failAt == "save2")
                 inner.AddProcessingJobs([new ProcessingJob(jobs[0].ImageId, jobs[0].BatchId, jobs[0].Workflow, CreatedAt)]);
+        }
+        public void AddImageProcessingBindings(IReadOnlyList<ImageProcessingBinding> bindings)
+        {
+            inner.AddImageProcessingBindings(bindings);
+            if (failAt == "save3")
+            {
+                var first = bindings[0];
+                inner.AddImageProcessingBindings([new ImageProcessingBinding(long.MaxValue, first.BatchId,
+                    first.PrimaryJobId, first.PrimaryWorkflow, first.PrimaryStatus, first.UpdatedAt)]);
+            }
         }
         public Task SaveChangesAsync(CancellationToken token) => inner.SaveChangesAsync(token);
         private sealed class FaultingTransaction(IUploadTransaction inner, FaultingPersistence owner, string? failAt)

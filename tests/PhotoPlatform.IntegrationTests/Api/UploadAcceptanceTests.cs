@@ -253,6 +253,9 @@ public sealed class UploadAcceptanceTests : IAsyncLifetime
         AssertSafeLogs();
     }
 
+    // 測試目的：確認 HTTP 取消仍遵守真正的 SQL Commit 邊界。
+    // 測試情境：在第二／第三次 Save 後、Commit 後或 Queue 等待時取消。
+    // 預期結果：Commit 前四表一起回滾並補償原檔；Commit 後資料與 Binding 都保留。
     // Client Cancellation 的 Backend Acceptance Test。
     // 使用 deterministic operation gate 控制取消發生時機，不依賴固定 delay。
     // 核心驗證 cancellation 是否發生在 Commit 前或 Commit 後：
@@ -266,6 +269,7 @@ public sealed class UploadAcceptanceTests : IAsyncLifetime
     // [Theory] 分別驗證 Commit 前、Commit 後及 Queue wait 中取消。
     [Theory]
     [InlineData("save2-after", false, 0)]
+    [InlineData("save3-after", false, 0)]
     [InlineData("commit-after", true, 0)]
     [InlineData("enqueue-wait", true, 1)]
     public async Task ClientCancellation_RespectsRealCommitBoundary(string pause, bool committed, int queued)
@@ -291,6 +295,8 @@ public sealed class UploadAcceptanceTests : IAsyncLifetime
             Assert.Equal(committed ? 1 : 0, state.Commits);
             Assert.Equal(committed ? 0 : 1, state.Rollbacks);
             Assert.True(state.CleanupTokensIndependent);
+            await using (var bindingRead = fixture.CreateContext())
+                Assert.Equal(committed ? 2 : 0, await bindingRead.ImageProcessingBindings.CountAsync());
             // 依 Commit boundary 驗證：
             // Commit 後保留資料；Commit 前則 Rollback 並 compensation。
             if (committed)

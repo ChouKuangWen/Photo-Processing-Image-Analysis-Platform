@@ -13,8 +13,9 @@ namespace PhotoPlatform.UnitTests.Application;
 // 使用測試替身驗證 Upload 流程、錯誤處理與各元件呼叫順序，不連真實 SQL Server 或檔案系統。
 public sealed class UploadServiceTests
 {
-    // 測試目標：確認成功 Upload 時資料關聯正確，且 Commit 一定發生在 Queue 之前。
-    // 同時測試單檔與多檔 Upload。
+    // 測試目的：確認 Upload 的資料與來源綁定在入列前都已保存。
+    // 測試情境：分別上傳一張及三張圖片，記錄三次 Save 的順序。
+    // 預期結果：先保存圖片、Job、Binding，最後 Commit 才能入列。
     [Theory]
     [InlineData(1)]
     [InlineData(3)]
@@ -34,9 +35,12 @@ public sealed class UploadServiceTests
             Assert.Equal(WorkflowType.Full, job.Workflow);
             Assert.Equal(ProcessingJobStatus.Pending, job.Status);
         });
-        // 全部驗證都在第一個 Storage 前；兩次 Save 與 Commit 完成後，才可出現任何 Queue 呼叫。
+        Assert.Equal(count, rig.Bindings.Count);
+        Assert.All(rig.Bindings, binding => Assert.Contains(rig.Jobs, job =>
+            job.Id == binding.PrimaryJobId && job.ImageId == binding.ImageId && job.Workflow == binding.PrimaryWorkflow));
+        // 三次 Save 與 Commit 完成後，才可出現任何 Queue 呼叫。
         Assert.Equal(Enumerable.Repeat("validate", count).Concat(Enumerable.Repeat("store", count))
-            .Concat(new[] { "begin", "batch", "images", "save1", "jobs", "save2", "commit" })
+            .Concat(new[] { "begin", "batch", "images", "save1", "jobs", "save2", "bindings", "save3", "commit" })
             .Concat(Enumerable.Repeat("queue", count)).Append("dispose"), rig.Events);
     }
 
@@ -61,13 +65,15 @@ public sealed class UploadServiceTests
         Assert.DoesNotContain("queue", rig.Events);
     }
 
-    // 測試目標：確認 Commit 前任何階段失敗時，都會清理已存檔案。
-    // Transaction 已建立時也必須嘗試 Rollback，且不能進入 Queue。
+    // 測試目的：確認 Commit 前失敗仍會清理檔案與交易。
+    // 測試情境：包含第三次 Binding Save 在內，分別注入各階段錯誤。
+    // 預期結果：保留原始錯誤，已開始的交易回滾，沒有 Job 入列。
     [Theory]
     [InlineData("store", false)]
     [InlineData("begin", false)]
     [InlineData("save1", true)]
     [InlineData("save2", true)]
+    [InlineData("save3", true)]
     [InlineData("commit", true)]
     public async Task PreCommitFailure_CleansStoredFilesAndPreservesOriginalException(string stage, bool rollback)
     {
@@ -108,8 +114,9 @@ public sealed class UploadServiceTests
         Assert.Empty(rig.Deleted);
     }
 
-    // 測試目標：確認 Cancellation 可以在 Upload 各階段正常往上傳遞。
-    // Commit 前取消仍需 Cleanup；Commit 後取消則不能刪除已提交資料。
+    // 測試目的：確認加入 Binding 後取消仍遵守 Commit 邊界。
+    // 測試情境：在各階段取消，包含第三次 Save。
+    // 預期結果：Commit 前取消清理本次檔案；入列階段取消不撤銷已提交資料。
     [Theory]
     [InlineData("before")]
     [InlineData("validate")]
@@ -117,6 +124,7 @@ public sealed class UploadServiceTests
     [InlineData("begin")]
     [InlineData("save1")]
     [InlineData("save2")]
+    [InlineData("save3")]
     [InlineData("commit")]
     [InlineData("queue")]
     public async Task Cancellation_PropagatesAndUsesIndependentCleanupToken(string stage)
@@ -381,6 +389,7 @@ public sealed class UploadServiceTests
         public Batch? Batch;
         public IReadOnlyList<Image> Images = [];
         public IReadOnlyList<ProcessingJob> Jobs = [];
+        public IReadOnlyList<ImageProcessingBinding> Bindings = [];
         private int saves;
 
         // Rig 自己同時實作 UploadService 所需的四個依賴。
@@ -427,6 +436,8 @@ public sealed class UploadServiceTests
         public void AddBatch(Batch batch) { Events.Add("batch"); Batch = batch; }
         public void AddImages(IReadOnlyList<Image> images) { Events.Add("images"); Images = images; }
         public void AddProcessingJobs(IReadOnlyList<ProcessingJob> jobs) { Events.Add("jobs"); Jobs = jobs; }
+        public void AddImageProcessingBindings(IReadOnlyList<ImageProcessingBinding> bindings)
+        { Events.Add("bindings"); Bindings = bindings; }
         public Task SaveChangesAsync(CancellationToken token)
         {
             Step($"save{++saves}", token);
@@ -434,7 +445,7 @@ public sealed class UploadServiceTests
             // 真正的 SQL Server Identity 行為由 Integration Test 驗證。
             if (saves == 1)
                 for (var i = 0; i < Images.Count; i++) typeof(Image).GetProperty(nameof(Image.Id))!.SetValue(Images[i], (long)i + 10);
-            else
+            else if (saves == 2)
                 for (var i = 0; i < Jobs.Count; i++) typeof(ProcessingJob).GetProperty(nameof(ProcessingJob.Id))!.SetValue(Jobs[i], (long)i + 20);
             return Task.CompletedTask;
         }

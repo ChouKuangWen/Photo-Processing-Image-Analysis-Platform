@@ -507,7 +507,9 @@ System Log 沿用 ILogger<T> 的安全 identifier／stage／code，不輸出 raw
 
 Primary Job 是 MOD-01 Upload 為 Image 建立的原始 Job，其 Naming／Analysis／DuplicateDetection／Full 都可作主 Workflow，不強制 Full。
 新增 ImageProcessingBindings 保存 PrimaryJobId／PrimaryWorkflow／PrimaryStatus；不修改 MOD-01 Job／Image／Batch mapping，保留 TotalCount = 已接受圖片數。
-首次發現只有一筆可由 MOD-01 交接契約確認的原始 Job 時可建立 binding；多筆／不一致／不能確認時不按最小 Id／最早時間猜測。
+F-03-01 核准補充：新 Upload 在同一 SQL Transaction 依序 Save Batch／Images、Save ProcessingJobs 取得 Job.Id、直接從本次建立的 Job 建立並 Save ImageProcessingBindings，最後 Commit，成功後才 Enqueue。Binding 是原始 Upload Job 的持久交接證據，不查詢候選選主。
+此整合允許最小擴充 UploadService、IUploadPersistence、UploadPersistence 與相關測試；Binding 必須納入 tracked 清理集合。Commit 前失敗整筆回滾並沿用 Storage 補償；Commit 後 Queue 失敗保留 Binding、原表資料與原檔。不改 API、Queue signature、TotalCount、原三表 Mapping，不新增 Migration。
+歷史缺 Binding 資料保持交接阻擋；不因唯一候選、相同 CreatedAt、最早時間或最小 Id 補建。不提供自動 backfill、手動選主或修復 API。既有 Binding 仍須核對完整關聯與 Batch 集合，不是免驗的 ready flag。
 binding 未確認，相關 Image 的任何 Job 都不得開始執行或副作用；先回報 handoff 阻擋。MOD-02 建立 secondary Job 前也必須確保 binding 已確認。
 這不授權自動選主、換主或重建計數；缺證據的 binding 阻擋之外部 API 為 HTTP 503／PROCESSING_PREREQUISITE_UNAVAILABLE（U-01 已核准），依 §3.6 使用安全共用錯誤格式。
 PrimaryJobId 綁定後不因 Retry／secondary Job 改變。Secondary 不修改 Upload aggregate 或 Image 的全域 Processing Status。

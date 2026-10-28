@@ -120,6 +120,13 @@ public sealed class UploadService(
             await persistence.SaveChangesAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Job.Id 已由第二次 Save 回填，直接記錄這次 Upload 的來源，不查候選猜主工作。
+            // 第三次 Save 仍在原交易內，失敗時 Binding 與前兩次寫入一起回滾。
+            persistence.AddImageProcessingBindings(jobs.Select(job => new ImageProcessingBinding(
+                job.ImageId, batch.Id, job.Id, job.Workflow, job.Status, batch.CreatedAt)).ToArray());
+            await persistence.SaveChangesAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
             // 8. Commit Database
             stage = UploadFailureStage.DatabaseCommit;
             await transaction.CommitAsync(cancellationToken);

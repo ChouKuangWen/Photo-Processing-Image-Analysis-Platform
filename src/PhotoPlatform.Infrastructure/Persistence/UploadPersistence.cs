@@ -43,6 +43,13 @@ public sealed class UploadPersistence(PhotoPlatformDbContext db) : IUploadPersis
         db.ProcessingJobs.AddRange(jobs);
     }
 
+    // 和本次 Upload 一起追蹤；回滾後也要 Detach，避免下一次 Save 又送出失敗的綁定。
+    public void AddImageProcessingBindings(IReadOnlyList<ImageProcessingBinding> bindings)
+    {
+        tracked.AddRange(bindings);
+        db.ImageProcessingBindings.AddRange(bindings);
+    }
+
     // 將目前 DbContext 追蹤的變更真正送到 Database。
     // TASK-08 第一次 SaveChanges 後，SQL Server 會產生 Image.Id，EF Core 再把 Id 回填到原本的 Image 物件。
     // 注意：SaveChanges 不等於 Commit，資料仍然屬於目前的 Transaction。
