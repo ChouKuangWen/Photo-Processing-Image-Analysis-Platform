@@ -4,6 +4,8 @@
 
 **實作基準：** `feature/mod-01-upload`，HEAD `a1bb29e1d7cf704a202adbe1c14741b6441575be`（`chore(vscode): set default solution`）。撰寫前工作樹乾淨，本文件原先不存在。所有「目前實作」指此基準，不代表其他分支或後續版本。
 
+**圖表複核基準：** `03d389e6dd3f594826314e077558a26832b11ecc`（`docs(mod-01): add upload architecture and learning guide`）。此次開始時位於 MOD-01 分支且工作樹乾淨，README 已提交；相較上述實作基準，該提交只新增本 README，沒有混入 MOD-02 程式。本次只修正圖表與必要說明。
+
 本次為文件盤點，沒有重新執行 restore、build 或 tests。因此，下文「測試驗證」指既有測試的情境與斷言，不能解讀為本次執行通過。TASK 文件的核取方塊也不作為目前功能是否存在的唯一證據。
 
 ## 目錄
@@ -70,19 +72,39 @@ MOD-01 的工作在「保存並交付工作、提供查詢」結束。MOD-02 負
 ### 圖 1：Clean Architecture 與組合根
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
-    API["UploadController / BatchStatusController"] --> APP["IUploadService / IBatchStatusQuery"]
-    APP --> USE["UploadService / BatchStatusQuery"]
-    USE --> DOM["Batch / Image / ProcessingJob"]
-    USE --> PORT["IFileStorageService / IUploadPersistence / IProcessingQueue / IBatchStatusPersistence"]
-    INF["LocalFileStorageService / UploadPersistence / ChannelProcessingQueue / BatchStatusPersistence"] -. "implements" .-> PORT
-    INF --> DB["PhotoPlatformDbContext / SQL Server"]
-    INF --> FS["Local File Storage"]
-    ROOT["UploadApiComposition.AddUploadApi"] --> API
-    ROOT --> INF
+    subgraph API["API"]
+        CTRL["UploadController<br/>BatchStatusController"]
+        ROOT["UploadApiComposition<br/>AddUploadApi"]
+    end
+    subgraph APP["Application"]
+        ENTRY["IUploadService<br/>IBatchStatusQuery"]
+        USE["UploadService<br/>BatchStatusQuery"]
+        PORT["IFileStorageService<br/>IUploadPersistence<br/>IProcessingQueue<br/>IBatchStatusPersistence"]
+    end
+    subgraph DOMAIN["Domain"]
+        DOM["Batch / Image / ProcessingJob<br/>初始狀態與建構規則"]
+    end
+    subgraph INFRA["Infrastructure"]
+        INF["LocalFileStorageService<br/>UploadPersistence<br/>ChannelProcessingQueue<br/>BatchStatusPersistence"]
+        DB["PhotoPlatformDbContext"]
+    end
+    CTRL --> ENTRY
+    USE -. 實作 .-> ENTRY
+    USE --> PORT
+    USE --> DOM
+    PORT --> DOM
+    INF -. 實作 .-> PORT
+    INF --> DOM
+    INF --> DB
+    ROOT -. DI 組裝 .-> USE
+    ROOT -. DI 組裝 .-> INF
 ```
 
-實線表示使用關係；虛線表示實作介面。執行時 `UploadService` 的呼叫會到 Infrastructure instance，但編譯時 Application 只引用 interface。`UploadApiComposition` 是 API 的組合根，因此 API project 額外引用 Infrastructure 來註冊實作，不等於 Controller 可以直接操作 DB。
+圖以編譯時的型別依賴為主：實線為使用／引用，標示「實作」的虛線由 concrete class 指向 interface；標示「DI 組裝」的虛線表示組合根註冊。ENTRY、PORT、INF 各自是同層元件的集合，並非每個類別都使用／實作集合裡的每個介面，精確對應見下表。沒有畫 interface 指向 implementation 的編譯依賴。執行時，DI 才讓介面呼叫到具體實例；該 runtime 順序見圖 3。
+
+Domain 保有必要字串／Workflow 檢查、關聯識別與初始狀態；Application 負責 use case 協調，不代表 Domain 只是無規則的資料容器。本基準未實作完整 Processing state machine。Infrastructure 的 DbContext 操作 SQL Server、Storage 操作本機檔案、Queue 操作 Channel；這些外部資源未重複擠入架構圖。API project 額外引用 Infrastructure 是為了 composition，不等於 Controller 直接操作 DB。
 
 ### Class／Interface 責任對照
 
@@ -110,37 +132,38 @@ flowchart TB
 ### 圖 2：Upload 完整 Flowchart
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TD
     A["HTTP multipart request"] --> B["ApiExceptionMiddleware.InvokeAsync"]
-    B --> C["UploadController.Upload / UploadHttpRequest.ReadAsync"]
-    C --> D{"multipart / workflow 合法？"}
+    B --> C["UploadController.Upload<br/>UploadHttpRequest.ReadAsync"]
+    C --> D{"HTTP 輸入合法？"}
     D -- 否 --> E["400 + 安全 error envelope"]
-    D -- 是 --> F["UploadService.UploadAsync：Request + 全部檔案驗證"]
+    D -- 是 --> F["UploadService.UploadAsync<br/>驗證 Request 與全部檔案"]
     F --> G{"全部驗證成功？"}
     G -- 否 --> E
-    G -- 是 --> H["全部 Storage.SaveAsync；記錄成功 paths"]
+    G -- 是 --> H["全部 SaveAsync<br/>記錄成功 paths"]
     H -- 成功 --> I["BeginTransactionAsync"]
-    I --> J["建立 Batch / Images；第一次 SaveChangesAsync"]
-    J --> K["取得 Image.Id；建立 Jobs；第二次 SaveChangesAsync"]
-    K --> L["CommitAsync；committed = true"]
+    I --> J["建立 Batch / Images<br/>SaveChangesAsync 1"]
+    J --> K["以 Image.Id 建立 Jobs<br/>SaveChangesAsync 2"]
+    K --> L["CommitAsync 成功<br/>committed = true"]
     L --> M["逐筆 EnqueueAsync"]
-    M -- 全部入列成功 --> N["準備 UploadResult；finally：Transaction.DisposeAsync"]
-    N -- 成功 --> U["UploadAsync 返回 UploadResult；Controller using 釋放 HTTP adapter"]
+    M -- 全部入列成功 --> N["準備 UploadResult<br/>finally：交易 DisposeAsync"]
+    N -- 成功 --> U["UploadAsync 返回結果<br/>Controller 釋放 HTTP adapter"]
     U -- 成功 --> O["202 success/data"]
-    N -- 唯一失敗 --> V["記錄 TransactionDispose；非取消錯誤包成 Internal failure；取消原樣傳遞"]
+    N -- 唯一失敗 --> V["TransactionDispose failure<br/>Internal 或原始取消"]
     V --> R
-    U -- adapter 釋放失敗 --> W["Controller 例外向上傳遞；DB / Storage 保留"]
-    H -- 失敗 --> P["補償本次成功存檔；無 Rollback"]
+    U -- 釋放失敗 --> W["adapter 例外向上傳遞<br/>保留 DB / Storage"]
+    H -- 失敗 --> P["補償本次成功存檔<br/>無 Rollback"]
     I -- 開始失敗 --> P
-    J -- 失敗 --> Q["嘗試 Rollback；逐筆補償；Dispose"]
+    J -- 失敗 --> Q["嘗試 Rollback<br/>逐筆補償與交易釋放"]
     K -- 失敗 --> Q
     L -- Commit 未成功 --> Q
-    M -- 失敗 --> R["保留 DB / Storage；禁止 Rollback / 補償"]
-    P --> S["向上傳遞原始取消或分類錯誤"]
+    M -- 失敗 --> R["保留 DB / Storage<br/>禁止 Rollback / 補償"]
+    P --> S["向上傳遞<br/>原始取消或分類錯誤"]
     Q --> S
     R --> S
     W --> T
-    S --> T["Middleware：取消且 RequestAborted 則 Abort；否則回應未開始才依分類映射；已開始則向外傳遞"]
+    S --> T["Middleware 例外處理<br/>映射、Abort 或向外傳遞"]
 ```
 
 先驗證全部檔案，再存全部檔案，避免驗證到最後一張才發現前面已產生副作用。SQL transaction 只包兩次 Save 與 Commit。圖中的一般失敗分支需要經 finally 釋放資源；Cancellation 同樣遵守 Commit 邊界，並不一律回傳 500。
@@ -172,24 +195,25 @@ Controller 隨後在自己的 using 離開時釋放 HTTP adapter，這是另一�
 ### 圖 3：Upload Sequence Diagram
 
 ```mermaid
+%%{init: {"sequence": {"actorMargin": 15, "width": 100, "wrap": false}}}%%
 sequenceDiagram
-    participant C as HTTP Client
-    participant M as ApiExceptionMiddleware
-    participant U as UploadController
-    participant H as UploadHttpRequest
-    participant S as UploadService
-    participant V as FileValidationService
-    participant F as LocalFileStorageService
-    participant P as UploadPersistence
-    participant T as UploadTransaction
-    participant Q as ChannelProcessingQueue
-    C->>M: POST /api/v1/images/upload
+    participant C as Client
+    participant M as HTTP 錯誤邊界
+    participant U as Controller
+    participant H as HTTP adapter
+    participant S as Upload 協調
+    participant V as Validator
+    participant F as Storage
+    participant P as Persistence
+    participant T as Transaction
+    participant Q as Queue
+    C->>M: POST<br/>/api/v1/images/upload
     M->>U: next(context)
-    U->>H: ReadAsync(Request, token)
+    U->>H: ReadAsync<br/>(Request, token)
     H-->>U: Request (UploadRequest)
     U->>S: UploadAsync(input.Request, token)
     loop 全部檔案
-        S->>V: ValidateAsync(file, token)
+        S->>V: ValidateAsync<br/>(file, token)
         V-->>S: FileValidationResult
     end
     loop 全部檔案
@@ -211,40 +235,44 @@ sequenceDiagram
         Q-->>S: 入列完成
     end
     S->>T: DisposeAsync()
-    T->>P: DetachUploadEntities callback
+    T->>P: DetachUploadEntities<br/>callback
     S-->>U: UploadResult
     U->>H: Dispose()
-    U-->>M: Accepted(success/data)
+    U-->>M: Accepted<br/>(success/data)
     M-->>C: HTTP 202
 ```
 
 這張圖聚焦成功路徑；兩個 loop 不能改成「驗一張就存一張」。實際 SQL I/O 在 UploadPersistence 的 DbContext 裡；UploadTransaction 包住 EF transaction。finally 必須跑完，UploadAsync 才真正把結果交回 Controller。
 
+為控制 Sequence 圖寬度，參與者使用角色短名：HTTP 錯誤邊界＝ApiExceptionMiddleware、Controller＝UploadController、HTTP adapter＝UploadHttpRequest、Upload 協調＝UploadService、Validator＝FileValidationService、Storage＝LocalFileStorageService、Persistence＝UploadPersistence、Transaction＝UploadTransaction、Queue＝ChannelProcessingQueue。這些只是圖中別名，沒有新增元件；FormUploadFile 為 adapter 內各檔案的 IUploadFile 實作。
+
 ### 圖 4：Upload Data Flow Diagram
 
 ```mermaid
-flowchart LR
-    HTTP["multipart：files + workflow 字串"] --> AD["UploadHttpRequest / FormUploadFile"]
-    AD --> DTO["UploadRequest：IUploadFile 清單 + WorkflowType"]
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
+flowchart TB
+    HTTP["multipart<br/>files / workflow"] --> AD["UploadHttpRequest<br/>FormUploadFile"]
+    AD --> DTO["UploadRequest<br/>Files / Workflow"]
     DTO --> VALID["FileValidationResult"]
-    DTO --> STREAM["OpenReadStream：原始 bytes"]
-    STREAM --> FILE["LocalFileStorageService：實體檔案"]
+    DTO --> STREAM["OpenReadStream<br/>原始 bytes"]
+    STREAM --> FILE["LocalFileStorageService<br/>實體檔案"]
     FILE --> KEY["original/{guid}"]
     DTO --> ENT["Batch / Image"]
     KEY --> ENT
-    ENT --> SAVE["UploadPersistence：第一次 Save"]
-    SAVE --> IDS["SQL Server 回填 Image.Id"]
-    IDS --> JOB["ProcessingJob：ImageId / BatchId / Workflow"]
-    JOB --> SAVE2["第二次 Save + Commit"]
-    SAVE2 --> SQL["batches / images / processing_jobs"]
-    JOB --> QUEUE["Commit 後傳入 Channel"]
-    SQL -. "後續獨立查詢" .-> SNAP["BatchStatusSnapshot"]
-    SNAP --> STATUS["BatchStatusResult：加入 progress"]
-    ENT --> RESULT["UploadResult：BatchId / TotalCount / Status"]
-    RESULT --> RESP["API success/data envelope"]
+    ENT --> SAVE["UploadPersistence<br/>SaveChangesAsync 1"]
+    SAVE --> IDS["Image.Id 回填"]
+    IDS --> JOB["ProcessingJob<br/>ImageId / BatchId / Workflow"]
+    JOB --> SAVE2["SaveChangesAsync 2<br/>CommitAsync"]
+    SAVE2 --> SQL["batches / images<br/>processing_jobs"]
+    SAVE2 -- 已提交的 Jobs --> QUEUE["Channel runtime queue"]
+    SQL -. 獨立 GET 查詢 .-> SNAP["BatchStatusSnapshot"]
+    SNAP --> STATUS["BatchStatusResult<br/>加入 progress"]
+    QUEUE -. 回傳前提：全部入列 .-> RESULT["UploadResult<br/>BatchId / TotalCount / Status"]
+    ENT -- Batch 欄位 --> RESULT
+    RESULT --> RESP["API success/data"]
 ```
 
-bytes 進 Storage，描述資料與 reference 進 SQL。回應只含 Application DTO，不包含 physical path 或整個 EF entity。Status 是另一個 GET request，沒有插入成功 Upload 呼叫鏈裡。
+bytes 進 Storage，描述資料與 reference 進 SQL。UploadResult 的欄位來自 Batch，不是 Channel 產生的資料；Queue 指向 result 的虛線只表示全部入列是正常回傳的前提，仍須完成圖 2 的清理。回應只含 Application DTO，不包含 physical path 或整個 EF entity。Status 是另一個 GET request，沒有插入成功 Upload 呼叫鏈裡。
 
 <a id="chapter-4"></a>
 ## Chapter 4 — TASK-01～TASK-12 完整實作解析
@@ -934,24 +962,25 @@ Image 的 constructor 將 Id 留在 0；Job constructor 接的是 scalar `long i
 ### 圖 6：SQL Transaction Flowchart
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TD
-    A["Validation / 全部 Storage Save：交易外"] --> B["BeginTransactionAsync"]
-    B --> C["AddBatch / AddImages：追蹤待新增"]
-    C --> D["SaveChangesAsync 1：INSERT Batch / Images"]
-    D --> E["SQL identity 回填 Image.Id"]
-    E --> F["new ProcessingJob / AddProcessingJobs"]
-    F --> G["SaveChangesAsync 2：INSERT Jobs，回填 Job.Id"]
+    A["Validation / Storage Save<br/>SQL 交易外"] --> B["BeginTransactionAsync"]
+    B --> C["AddBatch / AddImages<br/>追蹤待新增"]
+    C --> D["SaveChangesAsync 1<br/>INSERT Batch / Images"]
+    D --> E["Image.Id 回填"]
+    E --> F["建立 ProcessingJob<br/>AddProcessingJobs"]
+    F --> G["SaveChangesAsync 2<br/>INSERT Jobs / 回填 Job.Id"]
     G --> H["CommitAsync"]
-    H -- 成功 --> I["Enqueue：交易已提交，不可補償原始檔"]
-    D -- 失敗 --> R["RollbackAsync：撤銷此交易"]
+    H -- 成功 --> I["Enqueue：已提交<br/>禁止補償原始檔"]
+    D -- 失敗 --> R["嘗試 RollbackAsync"]
     G -- 失敗 --> R
     H -- 未成功 --> R
-    R --> X["Detach 本次 entities；另做 Storage 補償"]
-    I --> Z["Dispose transaction；Detach 本次 entities"]
+    R --> X["Detach 本次 entities<br/>另做 Storage 補償"]
+    I --> Z["交易 DisposeAsync<br/>Detach 本次 entities"]
     X --> Z
 ```
 
-Save1／Save2 之間尚無正式提交。Rollback 已嘗試 Detach，Dispose 還會再呼叫相同 callback；tracked 清單清空後重複呼叫不會再次處理。SQL transaction 無法讓圖外的檔案與 Channel 一起原子提交。
+Save1／Save2 之間尚無正式提交。Rollback 是嘗試，不保證外部失敗時一定撤銷成功；Rollback 已嘗試 Detach，Dispose 還會再呼叫相同 callback，tracked 清單清空後重複呼叫不會再次處理。Enqueue 失敗也會進 finally 釋放交易；圖 6 聚焦 SQL 邊界，完整 failure 分支與 Dispose 唯一失敗見圖 2／7。SQL transaction 無法讓圖外的檔案與 Channel 一起原子提交。
 
 ### 三張圖片的具體資料範例
 
@@ -982,23 +1011,24 @@ Save1／Save2 之間尚無正式提交。Rollback 已嘗試 Detach，Dispose 還
 ### 圖 7：Rollback／Compensation 決策圖
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TD
-    A["UploadAsync 主要操作拋錯或取消"] --> B["保存 failure、stage；安全 LogFailure"]
+    A["UploadAsync 拋錯或取消"] --> B["保存 failure / stage<br/>LogFailure"]
     B --> C{"committed？"}
-    C -- 是 --> D["保留全部 DB / Storage；不 Rollback、不 Delete"]
+    C -- 是 --> D["保留 DB / Storage<br/>不 Rollback、不 Delete"]
     C -- 否 --> E{"transaction 已取得？"}
     E -- 否 --> F["不 Rollback"]
-    E -- 是 --> G["RollbackAsync(None)；失敗只記錄"]
+    E -- 是 --> G["RollbackAsync(None)<br/>失敗只記錄"]
     F --> H["逐一 DeleteAsync(paths, None)"]
     G --> H
-    H --> I["單筆 Delete 失敗記錄；繼續其餘檔案"]
-    D --> J{"原始錯誤為取消或本次 Validation？"}
+    H --> I["單筆失敗記錄<br/>繼續其餘 Delete"]
+    D --> J{"取消或本次<br/>Validation？"}
     I --> J
     J -- 是 --> K["throw 原例外"]
-    J -- 否 --> L["UploadFailureException(stage, original)"]
-    K --> M["finally：嘗試 DisposeAsync"]
+    J -- 否 --> L["UploadFailureException<br/>stage / original"]
+    K --> M["finally<br/>有交易才 DisposeAsync"]
     L --> M
-    M --> N["Dispose 次要失敗不覆蓋 primary"]
+    M --> N["次要 Dispose 失敗<br/>不覆蓋 primary"]
 ```
 
 paths 只包含本次 Save 成功回傳的 key，沒有 directory scan 或依 DB 猜檔。Save 尚未成功回傳的 partial file 是 LocalFileStorageService 的責任。若正常路徑只有 Dispose 失敗，不走此圖的主要操作 catch，而由 finally 直接向上傳 TransactionDispose 分類錯誤。
@@ -1039,38 +1069,41 @@ Commit 成功與否依 `await CommitAsync` 正常回傳判定。本文件不把 
 ### 圖 8：HTTP Request Pipeline
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TD
     subgraph STARTUP["A. Application Startup：啟動與組態"]
-        P["Program：WebApplication.CreateBuilder"] --> DI["AddUploadApi：註冊 Controllers、Application Services、Persistence、DbContext、Storage、Validator、Queue"]
+        P["WebApplication.CreateBuilder"] --> DI["AddUploadApi<br/>註冊服務與生命週期"]
         DI --> BUILD["builder.Build"]
-        BUILD --> USE["UseUploadApi：UseMiddleware 註冊 ApiExceptionMiddleware；MapControllers 對應 endpoints"]
-        USE --> RUN["app.Run：啟動 host，接收 requests"]
+        BUILD --> USE["UseUploadApi<br/>UseMiddleware / MapControllers"]
+        USE --> RUN["app.Run<br/>啟動 host"]
     end
     subgraph RUNTIME["B. HTTP Request Runtime：每次請求"]
-        REQ["HTTP Request"] --> ROUTE["ASP.NET Core Routing：匹配 endpoint"]
-        ROUTE --> M["ApiExceptionMiddleware.InvokeAsync：TraceId / scope / next(context)"]
-        M --> EP["執行匹配的 MVC endpoint；依 Request Scope 解析服務"]
-        EP -- Upload route --> POST["UploadController.Upload"]
-        EP -- Status route --> GET["BatchStatusController.Status"]
-        EP -- 無匹配 --> NF["Routing 404；不執行這兩個 Actions"]
-        POST --> AD["UploadHttpRequest.ReadAsync"]
-        AD --> APP["IUploadService.UploadAsync；實作為 UploadService"]
-        APP -- 正常返回 --> CLEAN["Controller using：HTTP adapter Dispose"]
+        REQ["HTTP Request"] --> ROUTE["ASP.NET Core Routing<br/>匹配 endpoint"]
+        ROUTE --> M["ApiExceptionMiddleware<br/>InvokeAsync"]
+        M --> EP{"匹配的 MVC endpoint"}
+        EP -- Upload --> POST["UploadController<br/>Upload"]
+        EP -- Status --> GET["BatchStatusController<br/>Status"]
+        EP -- 無匹配 --> NF["404<br/>不執行這兩個 Actions"]
+        POST --> AD["UploadHttpRequest<br/>ReadAsync"]
+        AD --> APP["IUploadService<br/>UploadAsync"]
+        APP -- 正常返回 --> CLEAN["Controller using<br/>HTTP adapter Dispose"]
         CLEAN --> OK["202 ApiSuccessResponse"]
-        GET --> QUERY["IBatchStatusQuery.GetBatchStatusAsync"]
-        QUERY --> QR["200 success/data 或 404 ApiErrors"]
-        AD -- 例外 --> ERR["Middleware catch：分類 / ApiErrors / TraceId"]
+        GET --> QUERY["IBatchStatusQuery<br/>GetBatchStatusAsync"]
+        QUERY --> QR["200 success/data<br/>或 404 ApiErrors"]
+        AD -- 例外 --> ERR["Middleware catch<br/>分類 / ApiErrors / TraceId"]
         APP -- 例外 --> ERR
         CLEAN -- 例外 --> ERR
         QUERY -- 例外 --> ERR
-        ERR --> ER["RequestAborted 取消則 Abort；否則未開始回應才映射 400 / 500；已開始則向外傳遞"]
+        ERR --> ER["映射、Abort<br/>或向外傳遞"]
     end
-    RUN -. "啟動後可接收多次請求；不重新註冊 DI" .-> REQ
+    RUN -. 啟動後接收請求 .-> REQ
 ```
 
 Startup 只在應用程式啟動／組態時依序 CreateBuilder → AddUploadApi → Build → UseUploadApi → Run；每個 Request 不會重新執行這條註冊鏈。UseUploadApi 明確先呼叫 UseMiddleware，再 MapControllers；MapControllers 是 endpoint mapping，不是每次請求重新註冊 Controller 的 middleware。WebApplication 的隱含 Routing 會先匹配 endpoint，自訂 ApiExceptionMiddleware 再包住後續 endpoint 執行；圖中 Routing／MVC 是 framework 行為，不是新增的專案類別。
 
 Runtime 中，InvokeAsync 每次請求設定 TraceId／scope，再以 next(context) 執行後續處理。只有符合路由的請求才進對應 Action；Upload route 經 HTTP adapter 呼叫 UploadService.UploadAsync，Status route 則呼叫 BatchStatusQuery，不經上傳流程。Scoped Service 由 Request Scope 取得，不是重跑 AddUploadApi；Singleton Queue 在同一應用程式實例內共用。Program 沒有額外的自訂 authentication／SignalR／Worker middleware。
+
+圖內縮短的 AddUploadApi 節點包含 Controller、Application Services、Persistence、DbContext、Storage、Validator 與 Queue 註冊，精確 lifetime 見第 2 章。例外出口依 middleware 實際條件：OperationCanceledException 且 RequestAborted 已取消則 Abort；其他例外在 Response 尚未開始時映射既有 400／500 envelope，已開始時向外傳遞。Status 查無資料的 404 是 Controller 正常結果，不是 Upload failure。
 
 ### HTTP 邊界的細節
 
@@ -1159,33 +1192,26 @@ TraceId 由 middleware 沿用／建立 `HttpContext.TraceIdentifier`，放入 IL
 ### 圖 9：TASK Dependency Diagram
 
 ```mermaid
-flowchart LR
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
+flowchart TB
     T1["01 Foundation"] --> T2["02 Domain"]
     T2 --> T3["03 Contracts"]
     T3 --> T4["04 Validation"]
     T3 --> T5["05 Storage"]
     T2 --> T6["06 EF Persistence"]
     T3 --> T7["07 Queue"]
-    T2 --> T7
     T4 --> T8["08 UploadService"]
     T5 --> T8
     T6 --> T8
     T7 --> T8
-    T8 --> T9["09 Transaction / Compensation"]
-    T5 --> T9
-    T6 --> T9
+    T8 --> T9["09 Transaction<br/>Compensation"]
     T9 --> T10["10 HTTP API"]
-    T10 --> T11["11 Status / Observability"]
+    T10 --> T11["11 Status<br/>Observability"]
     T6 --> T11
-    T9 --> T11
     T11 --> T12["12 Backend Acceptance"]
-    T10 --> T12
-    T5 --> T12
-    T6 --> T12
-    T7 --> T12
 ```
 
-這是核心能力依賴圖，箭頭指向使用該能力的 TASK；不是唯一可行的開發排程，也沒有將所有間接 reference 重複畫上。Validation、Storage、DB、Queue 是不同支線，在 UploadService 匯合；Acceptance 再用真實資源檢查整條鏈。
+這是核心能力依賴圖，箭頭指向使用該能力的 TASK；不是唯一可行的開發排程。為避免交叉，圖省略已由主鏈表達的重複來源，例如 TASK-09 對 Storage／DB 的使用與 TASK-12 對各真實資源的驗證；完整依賴保留在下表。Validation、Storage、DB、Queue 是不同支線，在 UploadService 匯合；Acceptance 再用真實資源檢查整條鏈。
 
 | TASK | 核心責任 | 前置依賴 | 主要產出 | 後續使用者 |
 |---|---|---|---|---|
@@ -1307,7 +1333,7 @@ Queue 取出只是移交 Job，不會自動將它標 Completed；Channel 入列�
 
 | 圖 | 用途 | 流程核對來源 |
 |---|---|---|
-| 1 Clean Architecture | 區分使用關係、介面實作與 composition | csproj／AddUploadApi／interfaces |
+| 1 Clean Architecture | 區分編譯依賴、介面實作與 DI composition | csproj／AddUploadApi／interfaces／Domain constructors |
 | 2 Upload Flowchart | 成功與主要失敗分支 | UploadService／HTTP adapters |
 | 3 Upload Sequence | 類別之間的真實呼叫先後 | Controller／Service／Transaction callback |
 | 4 Upload Data Flow | bytes／DTO／Entity／SQL／response 的轉換 | contracts／Service／StatusQuery |
@@ -1317,7 +1343,25 @@ Queue 取出只是移交 Job，不會自動將它標 Completed；Channel 入列�
 | 8 HTTP Request Pipeline | 程式明確註冊與 endpoint 執行 | Program／UseUploadApi／middleware |
 | 9 TASK Dependencies | 基礎能力匯合與 acceptance 依賴 | 各 TASK 與 concrete dependencies |
 
-圖使用 flowchart／sequenceDiagram／erDiagram 基本語法，節點標籤加引號，避免在節點識別符內放方法括號；每張附解說。語法與呼叫流程採靜態核對；環境未安裝 Mermaid parser／renderer，未宣稱已通過 parser 或 GitHub 顯示驗收。
+圖使用 flowchart／sequenceDiagram／erDiagram，長標籤以 `<br/>` 在語意邊界換行，詳細說明移到圖外。Flowchart 使用 Mermaid 的 `htmlLabels: false` 設定輸出 SVG 節點文字，降低 HTML 節點量測造成的裁切風險；Sequence 只調整 actor spacing／width 與手動換行，不縮小字體、不使用編輯器專屬 CSS。圖中短名依旁文映射真實類別，不另創元件。
+
+本次重用現有 VS Code 擴充套件隨附的 Mermaid／Playwright，以本機 Chrome headless 執行九張圖的 parse、SVG render 與 PNG 截圖，並逐張視覺檢查。九張均成功；本機樣本未見節點文字裁切、節點重疊或連線穿過節點文字。原版在此環境也未重現使用者所見的裁切，因此不聲稱已證明原始裁切的根因。自然 SVG 寬度如下，並非 production 效能指標：
+
+| 圖／章節／類型 | 原排版與關聯複核 | 實際修正 | 本機寬度（前→後） | 本次判定 |
+|---|---|---|---|---|
+| 1／Ch.2／flowchart | 多類別長標籤；interface→implementation 容易被誤讀為編譯依賴 | 四層分區、明確實作箭頭與 DI 組裝，補 Domain 規則 | 1134→1094px | DOCUMENTATION ISSUE 已修正；本機 render PASS |
+| 2／Ch.3／flowchart | 錯誤出口與清理說明過長；Commit／Dispose 邊界正確 | 短標籤與分行；保留失敗、取消及兩種 Dispose 分支 | 1311→1154px | DOCUMENTATION ISSUE 已修正；本機 render PASS |
+| 3／Ch.3／sequenceDiagram | 十個完整類別名使橫向過寬；成功呼叫順序正確 | 角色別名＋完整名稱對照、間距調整、方法與參數分行 | 2450→1623px | DOCUMENTATION ISSUE 已修正；本機 render PASS |
+| 4／Ch.3／flowchart | LR 過寬；Batch→Result 易誤讀為可提前返回，亦須保留真正資料來源 | 改 TB、Commit 後 Jobs 才連 Queue；Batch 提供欄位，Queue 虛線僅為回傳前提 | 4118→623px | DOCUMENTATION ISSUE 已修正；本機 render PASS |
+| 5／Ch.6／erDiagram | PK／FK／NoAction 與三張表一致，未見需修正的排版 | 保留原圖；欄位省略與 unique 規則仍由旁文說明 | 548→548px | PASS；本機 render PASS |
+| 6／Ch.6／flowchart | 節點混合操作與長說明；Rollback 標籤應表達嘗試 | 分行、縮短，強調 rollback best effort，完整失敗路徑交叉參照 | 586→483px | DOCUMENTATION ISSUE 已修正；本機 render PASS |
+| 7／Ch.7／flowchart | 長判斷／例外文字；finally 未標「有交易」條件 | 分行，明確有交易才 Dispose，保留原始錯誤優先 | 739→641px | DOCUMENTATION ISSUE 已修正；本機 render PASS |
+| 8／Ch.8／flowchart | Startup 註冊清單與例外出口過長；雙階段與獨立 Status 路徑正確 | 短標籤，註冊內容與 exception 條件移到旁文 | 1184→1011px | DOCUMENTATION ISSUE 已修正；本機 render PASS |
+| 9／Ch.10／flowchart | LR 過寬、冗餘依賴箭頭造成交叉 | 改 TB、長標籤分行、移除由主鏈表達的重複箭頭；完整依賴保留表格 | 2103→767px | DOCUMENTATION ISSUE 已修正；本機 render PASS |
+
+逐圖來源仍見上表與各 TASK 的原始碼連結：圖 1 對照 ProjectReference／DI／Domain；圖 2、3、6、7 對照 UploadService、UploadPersistence、UploadTransaction、Storage；圖 4 另對照 DTO 與 BatchStatusQuery／Persistence；圖 5 對照 EF Configuration／Migration；圖 8 對照 Program、Composition、Controllers、HTTP adapters、Middleware；圖 9 對照 TASK-01～12 與實際 dependency。沒有新增 Worker／Orchestrator／Recovery、第三次 Save 或 Binding；沒有將 Query 畫成寫入狀態。
+
+**GitHub 相容性限制：** 本機使用的 Mermaid bundle、預設字型與 GitHub 不保證同版。上述為標準 Mermaid 語法與設定，無已知本機解析錯誤；GitHub 是否套用 init directive、HTML 換行與最終字型量測仍待該環境人工預覽，不能以本機 PASS 宣稱所有 renderer 的裁切都已解除。Sequence 圖保留十個角色，窄螢幕可能仍需放大／橫向閱讀；圖 2、8 較長，需縱向捲動。
 
 文件靜態檢查結果：12 個 Chapter、12 個獨立 TASK、9 個 Mermaid blocks；204 個檔案／anchor 連結目標均存在；13 段 C#／project code blocks 均能以原片段或選取的實際 statements 對應來源。程式片段省略部分註解或中間敘述，不是可獨立編譯的完整類別。未發現不成對 code fences、行尾空白或 Unicode replacement character；未以這些檢查取代人工內容 review。
 
@@ -1326,7 +1370,7 @@ Queue 取出只是移交 Job，不會自動將它標 Completed；Channel 入列�
 - TASK-10 已記錄的 EF logging filter、整體 upload／multipart 限制、adapter cleanup 政策仍待決策，本 README 沒有補出答案。
 - Local Storage 的 Copy／Flush 與 destination Dispose 同時失敗等分支，原 TASK 記錄尚無確定性執行測試覆蓋；不以控制流程閱讀代替測試。
 - UploadService helper 的 logger 防護不等於所有 HTTP logging 都具備相同防護；失敗 cleanup 也不保證零 orphan。
-- GitHub Mermaid 的實際排版、長表格閱讀感與教學深度應由人工在 rendered Markdown review。
+- GitHub Mermaid 的實際排版仍需人工預覽；本機九張圖已渲染檢查，不等於已完成 GitHub renderer 驗證。長表格閱讀感與教學深度也留待人工 review。
 - 未發現需要本次修改 production contract 才能描述的未明流程；已明確標出上述既有待決政策與分期差異，不宣稱它們因文件完成而解除。
 
-文件交付狀態：**READY FOR DOCUMENT REVIEW**。此狀態只代表本 README 可供人工審閱，不是新的 build／test／production acceptance 結論。
+文件交付狀態：**READY FOR README CODE REVIEW**。此狀態表示本次架構關聯複核與本機九圖渲染已完成，可供人工審閱；不是新的 build／test／production acceptance 結論，也不是 GitHub 實際預覽通過的宣告。
