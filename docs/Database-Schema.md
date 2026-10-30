@@ -301,6 +301,46 @@ processing_step_checkpoints增加DependencyWaitStartedAt datetimeoffset nullable
 
 以上是已核准規格形狀與可推導型別/transaction細節，不是Migration/DDL執行。實際DB舊表/資料/索引/相容性仍未核對；若牽動MOD01現有mapping須先另報。N-01 engine/精確版本阻擋pHash完整manifest，golden bytes/table/expected-output及效能量測由後續實作產生與驗收，未PASS。Export/Audit無新表，進階metric不持久化。
 
+## Phase B-1a 核准補充：原圖型輸入綁定
+
+本節為人工核准的規格定義，不是已建立資料表、Migration 或執行授權。僅補 EXIF_PARSING／SHA256_CALCULATION 的結果前持久來源；業務凍結、Canonical 欄位與 Fail-Closed 規則見 [MOD-02 B-1a](modules/MOD-02-Processing-Spec.md#最終核准補充--phase-b-1a-原圖型持久輸入契約)。保留既有表、Mapping、Migration 及資料，不重寫歷史章節。
+
+### processing_original_inputs
+
+| 欄位 | SQL Type | Nullability／Key／規則 |
+|---|---|---|
+| JobId | BIGINT | NOT NULL；PK；FK → processing_jobs.Id，NoAction |
+| ContentVersion | CHAR(64) | NOT NULL；恰64字元小寫 SHA256 |
+| ContentLength | BIGINT | NOT NULL；CHECK >= 0 |
+| WorkflowVersion | VARCHAR(50) | NOT NULL；非空；必須是核准且可解析版本 |
+
+同一 Job 僅一份原圖版本。ImageId 透過 Job 定位，不另存 Storage Path、原圖 bytes 或重複 ImageId。
+
+### processing_original_step_inputs
+
+| 欄位 | SQL Type | Nullability／Key／規則 |
+|---|---|---|
+| JobId | BIGINT | NOT NULL；FK → processing_original_inputs.JobId，NoAction |
+| Step | VARCHAR(50) | NOT NULL；限定 EXIF_PARSING／SHA256_CALCULATION |
+| RuleVersion | VARCHAR(50) | NOT NULL；非空；原核准且可解析版本 |
+| UploadCreatedAt | DATETIMEOFFSET(7) | EXIF 必填；SHA256 必須 NULL |
+| InputFingerprint | CHAR(64) | NOT NULL；恰64字元小寫 SHA256 |
+
+PK(JobId,Step)，不另設 identity。必要 CHECK：Step 精確符合兩種值；(Step=EXIF_PARSING AND UploadCreatedAt IS NOT NULL) OR (Step=SHA256_CALCULATION AND UploadCreatedAt IS NULL)。不得讓 SQL UNKNOWN 放行錯誤 NULL 組合。
+
+兩表 hash 欄位都必須檢查實際完整長度與僅含0～9／a～f，不得接受 CHAR padding、空白、大寫或依預設大小寫不敏感 collation 放行。Step／hash 的精確字元比對須使用可保證上述語意的檢查；WorkflowVersion／RuleVersion 必須拒絕空白值，真正核准版本解析由 Application／writer 核對，SQL 非空檢查不能授予執行權。
+
+### 不可變性與跨表交易責任
+
+- 首次 T1 與 Claim／Run／首個 invocation 同交易保存 parent 與所需 Step contracts；只保存 Workflow 實際包含的原圖型 Step。不能提前建立後續 Step 的 Running Log。
+- 來源建立後不可更新替換；重複 Claim 只可核對相同值，不使用 upsert 改綁。PK／FK 防止重複與孤立引用，不代表 SQL 已自行保證不可變或跨表業務一致。
+- writer 在同交易核對 Job／Image／Batch 關聯、Workflow 所需 Step 齊全、Run.WorkflowVersion 與 checkpoint 的 RuleVersion／InputFingerprint／順序一致。Step 的原圖 ContentVersion／Length 一律取同 Job parent。
+- T2／同 Run Resume／同 Job ManualRetry 沿原綁定，不重新選版本；沿 Run.JobId＋Step 查詢，不新增 Run／Checkpoint 欄位。原圖 ContentLength 必須與 Reader 完整內容及接受時 Image.FileSize 核對；不一致不得靜默修改 MOD-01 資料。
+- InputFingerprint 依 MOD-02 本章兩個具名 Canonical v1 Schema 計算；EXIF UploadCreatedAt 為參與 hash 的業務時間，SHA 不含此欄位。schemaVersion 由 serializer 輸出，不新增資料庫欄位。
+- 不新增 Context JSON、Retry Counter、JobStatus／CheckpointStatus 或 API；不以結果表或 ResultReference 代替原圖輸入綁定。
+- 後續實作若獲批准，須新增式 Migration 與 SQL 約束／升級驗證，不修改既有 Migration；本輪不建立或執行 Migration。
+- 缺綁定不自動 backfill，來源 mismatch 不換成新內容；不得僅憑 mismatch 關閉 Running。診斷代碼／回報接點／未關閉 Invocation 持久處置未定，相關路徑仍阻擋實作。F-04-01 其他輸入缺口、N-01／N-02 未解除。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。

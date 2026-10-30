@@ -157,6 +157,28 @@ Workflow/context/adapter contracts 與純測試一組；feat(mod-02): define wor
 
 完成後先提交變更摘要與測試結果供人工 Review；沒有另行授權不得自動 Commit/Push/Merge/Rebase 或切換分支。
 
+## Phase B-1a 人工核准補充：原圖型輸入文件契約
+
+本章記錄僅限 Specification 的批准，不是 Production／Tests／Mapping／Migration／SQL Writer 的實作授權，也不修改本 TASK 的 PLANNED 狀態或宣稱 TASK-04 COMPLETE。
+
+### 核准來源與範圍
+
+- [MOD-02 B-1a 最終補充](../../docs/modules/MOD-02-Processing-Spec.md#最終核准補充--phase-b-1a-原圖型持久輸入契約)：原圖選定、兩個完整 Canonical Schema、T1／T2／Resume／ManualRetry 與 Reader／Fail-Closed 責任。
+- [Database-Schema B-1a 補充](../../docs/Database-Schema.md#phase-b-1a-核准補充原圖型輸入綁定)：processing_original_inputs 及 processing_original_step_inputs 的 PK／FK／CHECK／不可變與交易核對規則。
+- 同 Job 共用原圖 ContentVersion／ContentLength／WorkflowVersion；Job＋Step 保存個別 RuleVersion／InputFingerprint，EXIF 另存 UploadCreatedAt，SHA 必須 NULL。不建立通用 Context JSON。
+- 首次 T1 只凍結 Workflow 所需的原圖型輸入，與 Claim／Run／首個 invocation 同提交；不提前建立後續 Running。T2、Resume、ManualRetry 沿原綁定；不改既有 T1～T5 邊界。
+- Canonical v1 維持既有格式；schemaVersion 自動輸出，EXIF uploadCreatedAt 是業務輸入，不受 runtime timestamp 排除規則排除；不重複加入 fileSize。原內容 hash 與業務 InputFingerprint 不混用。
+- Reader 必須確保核對 bytes 與 Adapter 消費 bytes 相同；純 Interface／ContentHandle 不等於具體 Storage 保證已交付，不改 Public Signature，不宣稱 MOD-01 Upload 已保存 SHA256。
+
+### 後續准入與待決事項
+
+1. 文件定稿不取代後續縮限實作的 pre-implementation-review 與人工批准。原 TASK「本 TASK 不新增 Migration」是先前 scope；本輪只核准新增表的規格，尚未批准任何 Migration 實作，後續須另界定 TASK／授權範圍。
+2. Frozen Binding 遺失不自動 backfill；內容／版本不符不換目前來源，不僅憑來源不符把 Running 改為 Failed／Interrupted，不新增狀態或擴充既有 API ErrorCode。
+3. 診斷 ErrorCode、回報接點、重新檢查／排程政策、未關閉 Invocation 的持久處置仍待決，受影響路徑維持 Implementation Blocker；沒有新 Failure／Retry 預設。
+4. MOD-03 Metadata frozen time／來源、MOD-04 Reader 同內容、MOD-05 Hash frozen version／FileSize 的文件對齊須另行授權；本輪只列待辦，不修改其他模組。
+5. F-04-01 仍有 B-1b／B-1c 及其他 Step input reconstruction 缺口；N-01／N-02 不解除。Reader、Provider、SQL Writer、演算法與真實恢復驗收均未由此章交付。
+6. 後續驗收應涵蓋共同內容一致、兩個 Canonical 固定向量、T1 原子性／並行 Claim 不覆寫、原輸入恢復／繼承、missing/mismatch fail-closed；SQL 約束須真實 SQL Server 測試，不以純型別或 Test Double 宣稱完成。本輪不新增或執行測試。
+
 ## 15. Out of Scope
 
 實作 EXIF／SHA256 duplicate／pHash／Naming 演算法、任意通用 Context 欄位、修改 Upload input、決定 N-01/N-02。

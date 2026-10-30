@@ -1727,6 +1727,80 @@ T1 JobClaim/ActiveRun/可執行checkpoint/RunningLog仍同transaction；不能�
 文件層MOD02核心可拆TASK（本輪不建立）：Run/checkpoint/History、T1～T5/T2-W/SQLClaim、singleInstance recovery/Pending補排程/retry/shutdown、Batchbinding/aggregate、adapter與best-effortevents、最小diagnostic。Export/進階Monitoring與pHash準確率不一概阻擋上述核心。
 Naming規格可作後續規劃，但完整執行仍須可核對Primarybinding與持久Naming input、storage adapter/receipt驗收，不把feature尚未合併等同已交接。Analysis/Full的引擎/精確版本N-01與候選就緒调度N-02未定，尚不能凍結完整profile實作准入；holdout/性能是後續验收要求非文件階段已完成能力。核心規劃准入不是原始碼實作授權或runtime READY。
 
+# 最終核准補充 — Phase B-1a 原圖型持久輸入契約
+
+本章記錄人工批准的文件契約，範圍僅限 EXIF_PARSING／SHA256_CALCULATION。不是 Production Code、Migration、SQL 執行或 Public API 實作授權，不將 TASK-04 標記完成。保留歷史審查文字；同題原圖定位缺口以本章補充為準，其他輸入缺口仍未解決。
+
+## 共用原圖與具名 Step Contract
+
+- 同一 Job 只有一份原圖綁定，EXIF／SHA256 共用 ContentVersion、ContentLength、WorkflowVersion。來源表為 processing_original_inputs；各 Step 的 RuleVersion、InputFingerprint 及 EXIF 的 UploadCreatedAt 存於 processing_original_step_inputs。完整欄位、PK／FK／CHECK 見 [Database-Schema B-1a 補充](../Database-Schema.md#phase-b-1a-核准補充原圖型輸入綁定)。
+- JobId／Step 是來源定位鍵，不是業務 Fingerprint 的額外輸入。Run → Job → Image 定位原 ImageId；Run.JobId＋Step 定位 Step contract。核對 Job／Image／Batch 關聯，不複製 Storage Path 或 Image Binary。
+- 綁定建立後不可換內容、版本或 Step 輸入；重複請求只可核對完全相同資料，不能以 upsert 覆寫。SQL PK 防重複不等於已保證不可更新。
+- Assessment 完全唯讀：從 Job／Image 及核准規則來源準備候選，Reader 核對完整原圖 SHA256 與 Length，並與 Image.FileSize 比對。沒有核准且可解析的 RuleVersion／WorkflowVersion 時阻擋，不填 default。字串相同不代表原規則實作仍可取得。
+- 首次 Assessment 建立的是當時可讀原圖的候選基準；本章不宣稱 MOD-01 Upload 已保存 SHA256，也不提供 Upload-time bytes 的額外證明。
+
+## 逐 Step Canonical Input v1
+
+沿用既有 CanonicalInputSchema 公開契約，不新增 Public API。下表就是兩個 Step 的欄位清單及 Ordinal 輸出順序；所有列出的欄位均不可為 null。
+
+### EXIF_PARSING
+
+| 順序 | 欄位 | Canonical 型別 | 來源／規則 |
+|---|---|---|---|
+| 1 | contentLength | Integer（Int64） | 共用綁定，非負 |
+| 2 | contentVersion | String | 共用綁定，64字元小寫 SHA256 |
+| 3 | imageId | Integer（Int64） | 經 Job 核對的 ImageId，正值 |
+| 4 | ruleVersion | String | EXIF Step contract，原核准 Metadata 規則版本 |
+| 5 | schemaVersion | Integer | serializer 自動輸出固定1，不建立 CanonicalField |
+| 6 | step | String | EXIF_PARSING |
+| 7 | uploadCreatedAt | UtcInstant | 首次綁定保存的 Image.CreatedAt；EXIF fallback 的業務輸入 |
+| 8 | workflowVersion | String | 共用綁定的原核准 WorkflowVersion |
+
+### SHA256_CALCULATION
+
+| 順序 | 欄位 | Canonical 型別 | 來源／規則 |
+|---|---|---|---|
+| 1 | contentLength | Integer（Int64） | 共用綁定，非負 |
+| 2 | contentVersion | String | 共用綁定，64字元小寫 SHA256 |
+| 3 | imageId | Integer（Int64） | 經 Job 核對的 ImageId，正值 |
+| 4 | ruleVersion | String | SHA Step contract，原核准 Hash 規則版本 |
+| 5 | schemaVersion | Integer | serializer 自動輸出固定1，不建立 CanonicalField |
+| 6 | step | String | SHA256_CALCULATION |
+| 7 | workflowVersion | String | 共用綁定的原核准 WorkflowVersion |
+
+SHA Schema 不含 uploadCreatedAt，不增加無業務用途的 null 欄位。ContentLength 是完整實際內容的長度，Image.FileSize 是 Upload 已接受長度的交叉核對值；不一致時阻擋，不靜默修正，不在 Canonical 重複加入 fileSize。SHA 結果的 FileSize 必須與核對後 ContentLength 一致。
+
+Canonical v1 固定 UTF-8 無 BOM、無排版空白、Ordinal property order、Invariant 數字及既有固定 ASCII-only escaping；不做 Unicode Normalize／Case Fold。字串與 property name 共用跳脫規則：可列印 ASCII 除引號／反斜線直接輸出，兩者跳脫；控制字元不採短格式，非 ASCII 及控制字元以小寫 UTF-16 `\uXXXX` 輸出，非 BMP 使用合法 surrogate pair，非法 surrogate 拒絕。UtcInstant 使用 UTC 的 O 格式、七位小數與 +00:00；不改 Phase A 已核准格式。
+
+ContentVersion = SHA256(原圖完整 bytes)；InputFingerprint = SHA256(Canonical v1 JSON UTF-8 bytes)，均輸出64字元小寫 hex，兩者不可互換。EXIF uploadCreatedAt 是業務時間，必須參與 Fingerprint；排除的是 Runtime Timestamp、TraceId、JobId、RunId／RunNo、AttemptNo、RetryOrdinal、ResumeNo、CancellationToken、Stream 及物理路徑。不得以 Fingerprint 反推遺失輸入。
+
+## 凍結時機、交易與版本繼承
+
+1. 首次 T1 將共用原圖綁定、Workflow 實際需要的原圖型 Step contracts 與 Claim／Run／首個 invocation 同交易提交或回滾。Naming 只需 EXIF；DuplicateDetection 只需 SHA256；Analysis／Full 需兩者，但既有 N-01／N-02 執行限制不因此解除。
+2. 後續 Step 尚未開始時不建立其 Running Log。原圖型輸入可提前凍結，不表示上游結果尚未產生的其他 Step 已有具體 ResultId；其他 Step Input Schema 留後續審查。
+3. T2 核對既有綁定、Run.WorkflowVersion、checkpoint 的 Step／StepOrder／RuleVersion／InputFingerprint，不重新選擇目前設定或原圖版本。
+4. Resume 沿原 Run、原輸入、RetryOrdinal／NextRetryAt 與已核對完成結果。ManualRetry 新 Run 沿同 Job 原持久綁定，資格及最多三個新增 Run 不變；執行識別變動不改業務 Fingerprint。
+5. 並行 Claim 依既有條件更新及新來源唯一鍵在同交易處理；失敗者不得覆寫贏家綁定或 Execute。跨表關聯、必要 Step 齊全與版本一致由 transaction writer 核對，不能只靠單表 CHECK。
+6. SQL transaction 不包住完整 Storage I/O。T1／T2 Commit outcome unknown 先查原 durable identity，確認提交才繼續；T3 unknown 先核對原結果、checkpoint、History 及 owner／版本，不重複提交結果或 aggregate。
+7. 以上只補既有 T1～T5 中的保存／核對責任，不新增交易類型、不改既有提交界線，也不實作 SQL Writer。
+
+## Reader 的同內容保證
+
+保留 IImageContentReader.OpenOriginalAsync(ImageId, CancellationToken)／ContentHandle(Stream, Length, ContentVersion) Signature。Infrastructure Reader 負責完整內容 hash／長度核對，回傳值必須描述 Adapter 實際消費的同一份完整 bytes。介面存在不代表真實 Storage 已具備此保證；穩定來源／受控快照等具體實作仍待核准與驗收。
+
+Assessment 後、T1 前已知來源改變時，不得用舊 assessment Claim；尚無持久綁定時才能重新開始唯讀 assessment。T1 不能與外部 Storage 原子鎖定：T1 後重新開啟內容時仍須核對 frozen ContentVersion／Length，不符不得 Execute 或改綁目前版本。不能先 hash A 再讓 Adapter 消費 B，也不能只靠事後檢查宣稱符合此要求。
+
+非 Seekable Stream 不要求 caller rewind，不能讀盡後當作完整未讀內容交付；caller 負責釋放 ContentHandle。無法保證核對內容與消費內容一致時阻擋，不改 Reader Signature、不直接在 Application 存取檔案系統／Storage SDK。Cancellation 不是舊 invocation 已停止或副作用不存在的證明。
+
+## Fail-Closed 與 Remaining Decisions
+
+- Frozen Binding 遺失不得自動 backfill；ContentVersion／Length／Fingerprint 不符、原規則不可解析時，不得選最新來源或推測原輸入。
+- 首次 Assessment 缺原圖不得 Claim／建立假 History；T1 後缺綁定、Resume mismatch 或 ManualRetry 原內容不可取得時阻擋該執行路徑，不擴大為無關 Batch 的停擺。
+- 不得僅憑來源不符把既有 Running 改為 Failed／Interrupted，不自動消耗 retry 槽位、增加 Run 或刪除 Pending Run。Commit 不明或資料矛盾時先核對原持久證據，不猜測終態。
+- 診斷 ErrorCode、回報接點、缺來源時的排程／重新檢查政策及未關閉 Invocation 的具體持久處置仍待批准。不得把既有 API ErrorCode 擴充成未核准用途，不新增 JobStatus／CheckpointStatus。未有核准診斷及持久處置的受影響路徑保持 Implementation Blocker。
+- F-04-01 僅完成本章原圖型契約補充，不宣稱整體結案；B-1b／B-1c、其他 Step 的持久引用、具體 Reader／Provider 與 SQL Writer 尚未交付。N-01／N-02 維持。
+- 跨模組文件對齊待另行授權：MOD-03 最終 F-01／F-05 加入 frozen UploadCreatedAt／內容規則來源；MOD-04 最終 F-02 補 Reader 同 bytes／非 Seekable 責任而不改 Signature；MOD-05 最終 F-03 補 frozen HashRuleVersion／ContentLength 與結果 FileSize 核對。本輪不修改這些文件。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。
