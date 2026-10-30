@@ -85,6 +85,21 @@ Domain 沿用 Workflow enum；Application 定義協調契約與 canonical input�
 
 ## 8. Database / Migration / Transaction Boundary
 
+### R3 已批准的縮限純 Outcome 子範圍（2026-10-30）
+
+正式 Signature 與完整不變量以 [MOD-02 StepOutcome R3 最終核准契約](../../docs/modules/MOD-02-Processing-Spec.md#最終核准契約--stepoutcome-r3-純型別2026-10-30) 為準，不複製第二套 Signature。本補充記錄人工定稿授權，不等於程式實作授權，且不將整份 TASK-04 標記完成。
+
+- 預計新增 `Application/Processing/StepEvidenceIdentity.cs`、`IStepEvidence.cs`、`StepFailure.cs`、`ResultMaterial.cs`、`CompletionProposal.cs`、`StepOutcome.cs`；純測試預計為 `UnitTests/Processing/StepOutcomeTests.cs`。若實際採同責任檔案組織，仍不得擴大 Public API。
+- 沿用 ProcessingErrorClassification、ProcessingLogStatus、ProcessingResultStatus；不改 Domain、不新增 enum。StepOutcome 是單次觀察、CompletionProposal 是待核對提案，皆不代表 T3 已提交或取得完成權。
+- Material 保留 Prepared/ExistingCandidate/NoNewResult。Prepared 未提交；ExistingCandidate 須核對已提交的同 input/version/owner 結果；NoNewResult 須具體 Step policy 許可，不能任意省略必要結果或製造假結果。
+- Returned factory 僅允許 Success/Success、Warning/Warning、Skipped/Skipped；建構及公開表面不得讓外部繞過驗證。nested private constructor 存取可用非公開協作解決，不開放任意 Returned 建構。
+- CompletionProposal 及 NeedsReconciliation 的具名 Evidence 必要；Failed 的 StepFailure 必要、模組 Evidence 可 null，但協調層持久 Invocation/Input 核對不可省略。Evidence Identity 僅表示目前 Step 業務輸入，不是 Invocation 或完整集合來源證明；集合來源由後續具體 Evidence 核對。
+- StepFailure 無 SafeMessage，只承載受控 ErrorCode/既有分類；純型別驗證 enum、非空 ASCII 與50字元上限，實際 code 白名單/分類映射由後續 Step policy 負責，不新增未核准值。
+- Geo 耗盡維持 Failed History，協調層核准 fallback 後同 T3 完成 Warning；不新增成功 invocation。Cancellation/Unknown 不自動重試、Failed 或 Interrupted。
+- 純測試覆蓋：三種 Material、必要參數與 nullable Failed Evidence、合法/未知 enums、字串及hash邊界、三組 Returned factory 與所有錯配、不可變公開表面。具體 code/Step policy、集合證據、T3 原子性及 fallback 執行不以 fake 驗收。
+- 後續實作須先完成獨立 pre-implementation-review 並獲人工實作批准；驗證 Restore/Solution Build、相關及全部 Unit Tests。無 SQL 寫入，不要求為純型別執行 SQL Integration Tests。新增手寫註解使用白話繁體中文 `//`；每個新測試有測試目的/測試情境/預期結果三行註解。
+- 本子範圍不定稿 IProcessingStepAdapter 或 IGeoFallbackPreparer，不實作 Concrete Payload/Evidence、Persistent Context、Claim/T3、Retry/Recovery，不新增 Migration/NuGet。F-04-01、N-01、N-02 維持；§7 原有完整 Context/Adapter 要求仍是後續未完成範圍。
+
 本 TASK 不新增 Migration。引用 Run/checkpoint 與各模組核准 input/result；本階段可用測試 adapter，正式 input provider 未交付不能假定完整 Workflow 可執行。
 
 共用不變量：T1 是 Claim/Run/checkpoint/Running 同 commit；T2 是同 Run 下一 invocation；T3 是 result/History/checkpoint/必要終態與 aggregate；

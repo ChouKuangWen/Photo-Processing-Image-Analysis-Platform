@@ -1596,6 +1596,118 @@ Queue
 
 **系統整體 Workflow、Module 之間的執行順序與功能組合，不屬於本文件。**
 
+# 最終核准契約 — StepOutcome R3 純型別（2026-10-30）
+
+本章記錄人工核准的縮限版純 Outcome 契約，不授權實作 Adapter、Fallback、Persistent Context 或 SQL Writer；不改變 §1.18～§1.22 的 T1～T5 交易界線。TASK-04 全部完成及 F-04-01、N-01、N-02 解除均不在本次批准範圍。
+
+## Public Signature
+
+以下為公開表面宣告，省略方法本體，不是可直接編譯的實作檔。沿用既有 Domain enums，不新增重複狀態；型別置 Application。使用 get-only properties 與受控建構，不能透過 public setter、init 或任意 Returned 建構繞過驗證。
+
+```csharp
+public sealed class StepEvidenceIdentity
+{
+    public StepEvidenceIdentity(long imageId, string step, string contentVersion,
+        string workflowVersion, string ruleVersion, string inputFingerprint);
+    public long ImageId { get; }
+    public string Step { get; }
+    public string ContentVersion { get; }
+    public string WorkflowVersion { get; }
+    public string RuleVersion { get; }
+    public string InputFingerprint { get; }
+}
+
+public interface IStepEvidence
+{
+    StepEvidenceIdentity Identity { get; }
+}
+
+public sealed class StepFailure
+{
+    public StepFailure(ProcessingErrorClassification classification, string errorCode);
+    public ProcessingErrorClassification Classification { get; }
+    public string ErrorCode { get; }
+}
+
+public abstract class ResultMaterial<TPayload> where TPayload : notnull
+{
+    private protected ResultMaterial();
+    public sealed class Prepared : ResultMaterial<TPayload>
+    {
+        public Prepared(TPayload payload);
+        public TPayload Payload { get; }
+    }
+    public sealed class ExistingCandidate : ResultMaterial<TPayload>
+    {
+        public ExistingCandidate(string resultReference);
+        public string ResultReference { get; }
+    }
+    public sealed class NoNewResult : ResultMaterial<TPayload>
+    {
+        public NoNewResult();
+    }
+}
+
+public sealed class CompletionProposal<TPayload, TEvidence>
+    where TPayload : notnull
+    where TEvidence : class, IStepEvidence
+{
+    public CompletionProposal(ProcessingResultStatus resultStatus,
+        ResultMaterial<TPayload> material, TEvidence evidence);
+    public ProcessingResultStatus ResultStatus { get; }
+    public ResultMaterial<TPayload> Material { get; }
+    public TEvidence Evidence { get; }
+}
+
+public abstract class StepOutcome<TPayload, TEvidence>
+    where TPayload : notnull
+    where TEvidence : class, IStepEvidence
+{
+    private protected StepOutcome();
+    public static Returned Success(CompletionProposal<TPayload, TEvidence> completion);
+    public static Returned Warning(CompletionProposal<TPayload, TEvidence> completion);
+    public static Returned Skipped(CompletionProposal<TPayload, TEvidence> completion);
+    public sealed class Returned : StepOutcome<TPayload, TEvidence>
+    {
+        private Returned(ProcessingLogStatus invocationStatus,
+            CompletionProposal<TPayload, TEvidence> completion);
+        public ProcessingLogStatus InvocationStatus { get; }
+        public CompletionProposal<TPayload, TEvidence> Completion { get; }
+    }
+    public sealed class Failed : StepOutcome<TPayload, TEvidence>
+    {
+        public Failed(StepFailure failure, TEvidence? evidence = null);
+        public StepFailure Failure { get; }
+        public TEvidence? Evidence { get; }
+    }
+    public sealed class NeedsReconciliation : StepOutcome<TPayload, TEvidence>
+    {
+        public NeedsReconciliation(TEvidence evidence);
+        public TEvidence Evidence { get; }
+    }
+}
+```
+
+Factory 可用非公開協作方式解決 nested private constructor 的 C# 存取限制，不擴大 Public API；外部不得任意建立 Returned 或不合法配對。
+
+## 語意、驗證與責任分界
+
+- StepOutcome 是單次執行觀察，不代表 T3 已提交。CompletionProposal 是完成提案，不是完成授權。Returned factory 僅允許 Success/Success、Warning/Warning、Skipped/Skipped；錯配、未知 enum、必要參數為 null 均拒絕。Failed 不直接等於 Failed Checkpoint。
+- Prepared 是待保存的具名模組資料（可新增或更新），不是持久化成功。ExistingCandidate 是受控 table/id/version 候選引用（非任意 path，長度不超過500）；仍須核對已提交結果、InputFingerprint、版本、來源及 ownership，不能只看 row 存在。NoNewResult 僅在具體 Step policy 明確允許且未省略必要結果更新時使用；nullable ResultReference 不是任意完成許可，不新增假的結果紀錄。
+- CompletionProposal 必須有合法 ProcessingResultStatus、Material 與具名 Evidence；NeedsReconciliation 必須有可核對的具名 Evidence。具體 Payload/Evidence 須不可變且另經模組契約核准，不以 object、Dictionary、任意 JSON 或 Approved/Verified boolean 代替來源證據。純型別只能檢查結構，不能宣稱已完成持久來源查核。
+- StepEvidenceIdentity 僅綁定目前 Step 的業務 Input，不是 Invocation Identity 或集合完整性證明。ImageId 為正值；Step/WorkflowVersion/RuleVersion 沿用既有非空且不超過50字元限制；ContentVersion/InputFingerprint 為64字元小寫 SHA256。語法有效不等於版本已核准。集合型結果仍須具體 Evidence 提供 Group/Snapshot/Membership/各 member QualityResult、HashResult 與版本的完整可核對來源鏈，不以單一 ImageId/ContentVersion 代替。
+- StepFailure 僅包含既有 Transient/Permanent 分類及非空、受控 ASCII、最長50字元 ErrorCode，不包含 SafeMessage。純型別檢查格式與 enum；各 Step policy 檢查已核准 code 及分類對應，不新增通用錯誤預設、不截斷 code、不將未知分類猜成 Transient。需要展示時由核准 code 映射安全文字，不直接使用 Exception.Message。
+- Failed 的模組 Evidence 可為 null，例如讀檔、解析、auth/config 或 timeout 在結果產生前失敗；不得虛構 Evidence。這不免除協調層核對 A：T1/T2 已提交 Invocation Identity，及 B：Frozen Input/Step Identity；可省略的僅為 C：模組診斷或結果證據。非 null Evidence 仍須核對 identity，不能因是 Failed 就忽略矛盾。
+- T3 依協調層保留的 StepCheckpointId/AttemptNo 核對原 Log、Job/Image、Checkpoint/Run 關聯、RetryOrdinal/ResumeNo 及輸入版本，不依賴 Adapter 自行指定 Log。Commit 不明依既有規則重新核對原 durable identity，不重複提交 delta，也不把 Outcome 套到下一 invocation。
+- Geo 第四邏輯槽位 transient failure 仍保留 Failed History；Retry budget 與 fallback 資格由協調層決定，模組準備核准 fallback 結果/provenance，T3 原子保存 Failed History 與 Completed/Warning Checkpoint。fallback 不新增成功 invocation，不另加 Attempt，不先獨立提交 Failed History 再另提交 fallback。具體 fallback 接點尚未定稿。
+- Cancellation 不證明 operation 已停止或副作用不存在；Unknown Side Effect/NeedsReconciliation 不自動轉 Failed/Interrupted，不授權重試或關閉狀態。沒有 Outcome 回傳時仍依持久 Invocation/Input/Operation 核對，不為符合型別虛構 Evidence；記憶體 Evidence 不能成為唯一恢復來源。
+
+## 延後事項與純型別驗收
+
+IProcessingStepAdapter Signature、IGeoFallbackPreparer 接點/實作、Concrete Payload/Evidence、Persistent Context Provider、SQL Claim/T3 Writer、Retry/Recovery 均未包含在本次批准。泛型 TInput 不能證明持久 Input 已可重建。F-04-01、N-01、N-02 保持原限制。
+
+純型別 Unit Tests 應驗證必要值/enum/長度/hash格式、Returned 三組配對及錯配拒絕、Failed 有無 Evidence、NeedsReconciliation 必要 Evidence、Material 三分支與不可變公開表面。測試替身不代表真實 Step policy 或集合來源驗收；不以純型別測試宣稱 T3、Geo fallback 或恢復已實作。
+
 # 最終核准契約 — F-07／F-08（核心規劃與Workflow邊界）
 
 ## WorkflowVersion與准入
