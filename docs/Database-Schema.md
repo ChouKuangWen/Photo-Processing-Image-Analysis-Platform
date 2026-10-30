@@ -393,6 +393,33 @@ Pending owner 可 NULL；Processing／Completed／Failed owner 必須非 NULL。
 Canonical 欄位、Null 與順序以 MOD-03 B-1b-01 補充為準，schemaVersion 由 serializer 產生，不加資料庫欄位。Completed GEO ErrorCode 一律 NULL，TransientExhausted 的錯誤碼只存原 Failed History；結果／History／checkpoint 同 T3。
 缺綁定不 backfill、mismatch 不換最新、commit unknown 先核對持久證據，不僅憑核對失敗關閉 Running。診斷碼／解除阻擋／Provider Manifest／API 展示仍待決；新增表仍僅存在於規格，未解除 F-04-01、N-01／N-02。
 
+## B-1b-02 核准補充：QUALITY 持久輸入
+
+本節是人工核准的 Specification，優先補足 B-1b-01 中 QUALITY input binding 尚未定義的同題描述；不表示 EF Entity／Mapping 或 SQL Server 表已交付。保留既有 quality_results 唯一鍵與 MOD-01、Run／Checkpoint 結構，不修改既有 Migration。
+
+### processing_quality_inputs
+
+| 欄位 | 型別／Nullability／Key |
+|---|---|
+| JobId | BIGINT NOT NULL，PK／FK → processing_original_inputs.JobId，NoAction |
+| MetadataResultId | BIGINT NOT NULL，FK → image_metadata_results.Id，NoAction |
+| QualityRuleVersion | VARCHAR(50) NOT NULL，非空、受控且須可解析 |
+| InputFingerprint | CHAR(64) NOT NULL，精確64字元小寫 SHA256 |
+
+JobId PK 保證每 Job 一組綁定，不另增 identity、rowversion、Result Owner、Retry Counter 或重複 Unique。不保存原圖 bytes、Storage Path、完整 Metadata JSON。版本 CHECK 拒絕空白；hash CHECK 僅接受完整0～9/a～f，拒絕 padding、空白、大寫及非法長度，不能依大小寫不敏感比較放行。
+建立後不可修改／覆寫／換最新來源；重複建立只允許完全一致核對，不 upsert 改綁。PK／FK 不保證來源 Completed、內容正確或不可更新；由 T2 核對跨表契約。
+
+對目前包含 QUALITY_ANALYSIS 的核准 Workflow，同 Job 的 processing_quality_inputs.MetadataResultId 必須等於 processing_geo_inputs.MetadataResultId，且兩者均符合原 Job 的核准 EXIF 結果鏈；同 ImageId 或最新 EXIF 不能替代。不新增無 GEO 的 QUALITY 執行路徑，也不擅加未核准的 composite FK。
+原 ContentVersion／ContentLength／WorkflowVersion 由 processing_original_inputs 查回；MetadataRuleVersion、Metadata input fingerprint、有效性／Orientation／provenance 由不可變 EXIF 查回。Canonical 欄位及順序依 MOD-07 B-1b-02 補充，不另存重複 JSON 或 schemaVersion。
+首次 QUALITY T2 同交易核對來源／版本／前置 Step、保存或核對 binding 與 checkpoint fingerprint、建立 Running Invocation；整筆提交或回滾，確認 Commit 才執行。完整 Storage I/O／分析不包在 SQL transaction。
+
+### 與結果及版本來源的界線
+
+quality_results 保留 UNIQUE(ImageId,ContentVersion,QualityRuleVersion,MetadataResultId)，不新增 Result Attempt。此鍵不等於完整 InputFingerprint；Completed 候選仍須核對來源、版本、原 Owner Checkpoint 與完整輸入證據，不將不同 WorkflowVersion 自動視為相同業務輸入。
+Binding 不授予結果寫入權；owner 是原生產者，不是所有消費者。T3 仍核對 owner＋rowversion，與 History／Checkpoint 原子提交；Failed 不冒充完成，同 key Failed 無核准處置時 Fail-Closed。
+已有 binding 的 Resume／ManualRetry 沿同 Job 原輸入。原 Run 尚未開始 QUALITY 且無 binding 時，不虛構 MetadataResultId、不選最新 QualityRuleVersion；若原 Workflow 缺可重建的持久版本依據，該路徑為 Implementation Blocker。本節不新增版本選擇表、預設或政策。
+N-01 profile、N-02、F-04-01 其他輸入缺口、Reader 同 bytes、Missing／Mismatch 診斷及未關閉 invocation 處置仍未完成。未來實作須另獲授權並以新增式 Migration／真實 SQL 測試驗證，本輪不建立或執行 Migration。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。

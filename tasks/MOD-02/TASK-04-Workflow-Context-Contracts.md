@@ -193,6 +193,18 @@ Workflow/context/adapter contracts 與純測試一組；feat(mod-02): define wor
 - MOD-03 Pending／Failed 欄位映射與跨 Run 展示為 API Contract Pending；不改 Route／Response／HTTP Status／Public ErrorCode，不以 IMAGE_NOT_FOUND 代替未就緒。
 - 不修改 MOD-01、Run／Checkpoint、StepOutcome R3；F-04-01 整體、N-01／N-02、B-1b-02／B-1c 仍保留，後續實作須獨立 Review 及人工批准。
 
+## B-1b-02 核准補充：QUALITY Input 文件契約
+
+本節記錄核心契約的文件批准，優先補足先前「QUALITY T2 binding 尚待定義」描述，不表示實作或驗收完成。來源為 MOD-07 B-1b-02 的 Canonical／Profile、Database-Schema 同名表定義及 MOD-02 同名交易契約；不以 TASK 覆蓋正式規格。
+
+- 新規格 processing_quality_inputs 每 Job 固定 MetadataResultId／QualityRuleVersion／InputFingerprint，不存原圖、Path、Metadata JSON，不增加 owner／rowversion／Retry Counter。
+- 目前核准 Workflow 的 QUALITY／GEO MetadataResultId 必須相同且符合原 Job EXIF 鏈；不是僅同 ImageId，不讀最新來源。
+- 首次 T2 來源核對、binding／fingerprint 與 Running 原子提交；確認後才分析，不跨外部 I/O。Resume／ManualRetry 沿原來源，不改 T1～T5。
+- 原 Run 未開始 QUALITY 時，不虛構引用或選最新規則；原版本選擇缺持久依據即為 Implementation Blocker，尚未批准新的版本選擇政策。
+- Canonical v1 使用 MOD-07 的十個固定欄位，schemaVersion 自動輸出；不含 GEO 地名、runtime 識別或任意 JSON。Quality 公式不變。
+- Completed 結果須完整來源／版本／owner 證據才可重用；唯一鍵不等於完整 fingerprint，不跨未核准 WorkflowVersion 等價重用；Failed 同 key 無核准處置即阻擋，不新增 Result Attempt。
+- N-01／N-02／F-04-01 其他 Step、Reader、診斷／未關閉 invocation、跨 Run 未凍結規則與 Failed 結果處置仍保留。新增表僅是 Specification，未交付 EF／SQL；不開始 B-1b-03／B-1c，不標 TASK-04 COMPLETE。
+
 ## 15. Out of Scope
 
 實作 EXIF／SHA256 duplicate／pHash／Naming 演算法、任意通用 Context 欄位、修改 Upload input、決定 N-01/N-02。

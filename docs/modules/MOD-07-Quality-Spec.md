@@ -1449,6 +1449,55 @@ Build
 
 全部完成後才算 Quality Module Done。
 
+# B-1b-02 核准補充 — QUALITY Frozen Input
+
+本章為人工核准的文件契約，優先補足既有 B-1b-01「QUALITY T2 binding 尚待定義」的同題描述（包括下方保留章節）；不修改既有品質公式／權重／錯誤碼，也不代表 Adapter、EF／SQL 已實作或 TASK-04 COMPLETE。
+
+## 來源與綁定
+
+processing_quality_inputs 每 Job 一組不可變輸入，保存 MetadataResultId、QualityRuleVersion、InputFingerprint；欄位與約束依 Database-Schema B-1b-02。原圖內容／長度／Workflow 由 B-1a 原圖綁定取得。
+目前 Analysis／Full 都先經 GEO。QUALITY MetadataResultId 必須等於同 Job processing_geo_inputs.MetadataResultId，並與原 Job 核准 EXIF 結果鏈一致；不以相同 ImageId、最新 row 或可變 Image Projection 代替。EXIF 必須已提交且不可變，GEO Completion 與其他前置 Step 須符合 Workflow gate。
+有效性、Orientation、provenance 由原 EXIF authority 讀取；GEO LocationName 不計入六項 Metadata 分數。缺來源／版本不符不等於六項皆缺，不猜分。
+
+## QUALITY Canonical Input v1
+
+下列欄位按 Ordinal 輸出，全部非 NULL，沿用既有 CanonicalInputSchema，不改 Public Signature。
+
+| 順序 | 欄位 | Canonical 型別／來源 |
+|---|---|---|
+| 1 | contentLength | Integer／Int64，非負；原圖綁定的完整內容長度 |
+| 2 | contentVersion | String，64字元小寫 SHA256；原圖綁定，核對 EXIF SourceSHA256 |
+| 3 | imageId | Integer／Int64，正值；Job／EXIF 一致的 Image |
+| 4 | metadataInputFingerprint | String，64字元小寫 SHA256；原不可變 EXIF |
+| 5 | metadataResultId | Integer／Int64，正值；QUALITY binding，與 GEO 來源一致 |
+| 6 | metadataRuleVersion | String，受控、非空、可解析的原 EXIF 版本 |
+| 7 | ruleVersion | String，受控、非空、固定 QualityRuleVersion |
+| 8 | schemaVersion | Integer，固定1，由 serializer 自動輸出，不建立 CanonicalField |
+| 9 | step | String，固定 QUALITY_ANALYSIS |
+| 10 | workflowVersion | String，原圖綁定／Run 的固定版本 |
+
+版本沿既有50字元限制與精確比對，不改成最新設定。ContentLength 用於來源一致性，不新增品質算分因子，不重複加入 FileSize。
+Fingerprint=SHA256(Canonical UTF-8 bytes)，64字元小寫 hex；ContentVersion 是原圖完整 bytes 的 SHA256，兩者不可混用。沿用 v1 無 BOM／無排版空白、固定 ASCII-only escaping、Ordinal、Invariant 數值及不做 Unicode Normalize／Case Fold 的規則。
+不包含 GEO LocationName、整段 Metadata JSON、Runtime Timestamp、RunId／RunNo、AttemptNo／RetryOrdinal／ResumeNo、TraceId、DbContext、Stream、Storage Path、目前 Image Projection 或未核准 Profile Default。MetadataResultId 與來源版本定位不可變 provenance，不用任意 Dictionary／object Context。
+
+## QualityRuleVersion 與 N-01
+
+QualityRuleVersion 必須唯一解析到核准且不可原地變更的有效分析 Profile；Decoder、ICC、Orientation、Resize、GrayScale 與品質計算規則，必須有一致且可驗證的版本來源。
+quality-rules-v1 的公式不代表完整可執行引擎／Profile 已批准。N-01 未解決時可定稿此持久契約，不可自行選引擎或宣稱真實 Adapter 可執行；原版本不可解析時 Fail-Closed。
+未來若將 QualityRuleVersion 與 Decoder Profile 分開版本化，先重新審查 Canonical Schema 與 Quality Result 唯一鍵，不默默更換。同 bytes 的 Reader 保證與解碼／分析視圖是不同責任，均須後續交付。
+
+## T2、恢復及結果重用
+
+首次 T2 核對 Job／Run／Checkpoint、原圖綁定、已提交 EXIF、同 Job GEO 來源一致性及 Workflow 前置條件；固定來源／規則／fingerprint，與 Running Invocation 同一短 SQL transaction 提交或回滾。Commit 確認後才執行；不跨完整 Storage I/O 或品質分析。
+已有 binding 時，Resume 沿原 Run，ManualRetry 新 Run 沿同 Job 原業務輸入並重新核對 fingerprint，不換最新來源。原 Run 從未開始 QUALITY 時，不虛構不存在的 MetadataResultId，也不直接選最新 QualityRuleVersion；必須依原 Workflow 已核准且可重建的版本選擇規則。若持久版本依據不足，該首次具體化／跨 Run 路徑保持 Implementation Blocker，不用執行當下設定補洞。
+Timeout／Cancellation／失聯不證明舊程序已停止。T3 outcome unknown 先核對原 Checkpoint、History、Quality Result、Owner 與提交證據，不盲目重送、建立第二份結果或重複 aggregate；不改 T1～T5、Retry 資格或上限。
+保留既有 quality_results 唯一鍵(ImageId,ContentVersion,QualityRuleVersion,MetadataResultId)，它不等於完整 InputFingerprint。Completed 候選須核對來源、版本、原 Owner Checkpoint 及完整輸入證據；不同 WorkflowVersion 未經核准不能視為可重用同輸入。重用不更換原 owner；Binding 不授予寫入權，T3 仍須 owner＋rowversion 與 History／Checkpoint 原子更新。
+Failed Result 不冒充完成，同 key Failed 無核准處置時 Fail-Closed，不新增 Result Attempt 表或擅自重開機制。
+
+## Remaining Implementation Blockers
+
+N-01 Decoder／ICC／Profile、N-02 VISUAL 等待、F-04-01 其他 Step、Reader 實際同 bytes、Missing／Mismatch 診斷及未關閉 invocation 處置仍保留。尚未凍結 QualityRuleVersion 的跨 Run 來源選擇、同 key Failed 受控處置亦未批准；本章不新增狀態、ErrorCode、API、套件或版本預設，不開始 B-1b-03／B-1c。
+
 # B-1b-01 核准補充 — QUALITY 的 EXIF Authority
 
 本節補充並優先於同題的共享 Metadata 來源描述（包含下方保留的「最終核准契約 — F-05」章），不改品質公式、API 或已核准錯誤規則。

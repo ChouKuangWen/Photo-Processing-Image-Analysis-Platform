@@ -1819,6 +1819,20 @@ Assessment 後、T1 前已知來源改變時，不得用舊 assessment Claim；�
 - 實際 Provider Manifest、診斷碼／回報接點、排程重查、人工解除阻擋及未關閉 invocation 的具體處置仍為 Implementation Blocker。MOD-03 API Pending／Failed 映射與跨 Run 展示另列 API Contract Pending，不宣稱 API 完整可實作。
 - F-04-01 整體、QUALITY T2 binding、其他 B-1b／B-1c、N-01／N-02 未解除；不將本次文件定稿視為 TASK-04 COMPLETE。
 
+## B-1b-02 核准補充：QUALITY 持久來源與首次 T2
+
+本節優先補足 B-1b-01 中 QUALITY binding 尚待定義的同題內容，僅為文件授權；不改 T1～T5、StepOutcome R3、Domain 狀態或已完成程式。正式 Canonical／Profile 契約依 MOD-07 B-1b-02，Physical Schema 依 Database-Schema 同名補充。
+
+- processing_quality_inputs 每 Job 一組不可變 MetadataResultId／QualityRuleVersion／InputFingerprint；原內容、長度、Workflow 從 B-1a 綁定取得，EXIF 版本／provenance 從不可變來源取得。
+- 對目前含 QUALITY 的 Analysis／Full，QUALITY MetadataResultId 必須等於同 Job processing_geo_inputs.MetadataResultId，且符合原 Job 已核准 EXIF 結果鏈。不按最新 CreatedAt／最大 Id 或僅同 ImageId 判定；不擴充無 GEO 的 Workflow。
+- 首次 QUALITY T2 核對 Job／Run／Checkpoint、原圖、已提交 EXIF、GEO 來源與前置 Step；原子保存或核對 binding／checkpoint fingerprint 並建立 Running Invocation，失敗整筆回滾，不留下部分 binding 或假 Running。
+- 確認 Commit 後才執行 Adapter，SQL transaction 不包完整 Storage I/O／分析。Reader 仍須保證核對與實際消費 bytes 一致；純介面不是已交付保證。
+- Resume 沿原 Run，已有 binding 的 ManualRetry 沿同 Job 原輸入，核對原內容／Metadata／規則／fingerprint，不換最新。舊程序停止與安全恢復核對不能由 timeout／Cancellation／失聯代替。
+- 若原 Run 從未開始 QUALITY，不能假造已選 MetadataResultId 或使用最新 QualityRuleVersion。原 Workflow 的核准版本選擇必須可從持久依據重建；若不足，此首次具體化／Resume／ManualRetry 路徑為明確 Implementation Blocker，不新增版本預設或選擇政策。
+- T3 unknown 先核對原 Checkpoint、History、Quality Result 與 Owner，不重複 INSERT／提交 aggregate。Completed 重用須來源／版本／原 owner checkpoint／完整輸入證據，不把結果唯一鍵視為完整 fingerprint，也不自動視不同 WorkflowVersion 等價。
+- Input Binding 不授予 Result ownership；owner 是原生產者，不是所有消費者。T3 依 owner＋rowversion 與 History／Checkpoint 原子更新。Failed 不冒充完成，同 key Failed 無核准處置時阻擋，不新增 Result Attempt。
+- N-01 完整 Profile 未批准，不因 quality-rules-v1 公式存在就宣稱可執行；版本不可解析 Fail-Closed。N-02、F-04-01 其他輸入、診斷／未關閉 invocation／Reader 與同 key Failed 處置仍保留。資料表、Provider、Adapter、Writer 尚未由本章交付，TASK-04 不標 COMPLETE。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。
