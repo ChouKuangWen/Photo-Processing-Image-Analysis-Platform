@@ -341,6 +341,58 @@ PK(JobId,Step)，不另設 identity。必要 CHECK：Step 精確符合兩種值�
 - 後續實作若獲批准，須新增式 Migration 與 SQL 約束／升級驗證，不修改既有 Migration；本輪不建立或執行 Migration。
 - 缺綁定不自動 backfill，來源 mismatch 不換成新內容；不得僅憑 mismatch 關閉 Running。診斷代碼／回報接點／未關閉 Invocation 持久處置未定，相關路徑仍阻擋實作。F-04-01 其他輸入缺口、N-01／N-02 未解除。
 
+## B-1b-01 核准補充：EXIF／GEO Authority 與 GEO Input Binding
+
+本節優先於 §9 同題的共享 Metadata 欄位定義；僅為 Specification，非已建立表或 Migration 授權。保留 MOD-01 原表及現有 Run／Checkpoint Mapping，不修改既有 Migration。
+
+### image_metadata_results Authority 調整
+
+保留 §9 的 Id／ImageId、SourceSHA256、MetadataRuleVersion、InputFingerprint、Status／Outcome、EXIF 欄位、原始 FieldProvenance、時間、owner／rowversion，以及 UNIQUE(ImageId,InputFingerprint,MetadataRuleVersion)。Completed EXIF 的業務內容、來源與完成證據不可覆寫。
+GeoOutcome／LocationName 不再屬本表正式 Result Authority，移至 image_geo_results；不保留雙重可更新權威。這不是刪除實際 SQL 欄位的授權。GPS Valid 為合法成對座標；Missing／Invalid 正規化座標均 NULL，原始非法值／reference 保留於受控 EXIF provenance。
+
+### image_geo_results
+
+| 欄位 | 型別／Nullability／Key |
+|---|---|
+| Id | BIGINT NOT NULL PK |
+| MetadataResultId | BIGINT NOT NULL FK → image_metadata_results.Id，NoAction |
+| GeoRuleVersion | VARCHAR(50) NOT NULL，非空、核准且可解析 |
+| InputFingerprint | CHAR(64) NOT NULL，精確小寫 SHA256 |
+| Status | VARCHAR(20) NOT NULL |
+| Outcome | VARCHAR(20) NULL |
+| GeoOutcome | VARCHAR(30) NULL |
+| LocationName | NVARCHAR(150) NULL |
+| ErrorCode | VARCHAR(100) NULL |
+| CreatedAt | DATETIMEOFFSET(7) NOT NULL |
+| CompletedAt | DATETIMEOFFSET(7) NULL |
+| ProcessingOwnerCheckpointId | BIGINT NULL FK → processing_step_checkpoints.Id，NoAction |
+| rowversion | SQL rowversion |
+
+UNIQUE(MetadataResultId,GeoRuleVersion,InputFingerprint)。ImageId／原內容透過不可變 EXIF 定位，不重複存放。FK 存在不證明 EXIF Completed 或版本一致。
+
+CHECK 必須以明確 IS NULL／IS NOT NULL 及精確字串比較，僅允許：
+- Pending／Processing：Outcome、GeoOutcome、LocationName、ErrorCode、CompletedAt 全為 NULL。
+- Completed／Success／Resolved：LocationName 有效且非空、ErrorCode NULL、CompletedAt 非 NULL。
+- Completed／Skipped／MissingGPS：LocationName=UnknownLoc、ErrorCode NULL、CompletedAt 非 NULL。
+- Completed／Warning／InvalidGPS 或 TransientExhausted：LocationName=UnknownLoc、ErrorCode NULL、CompletedAt 非 NULL。
+- Failed／Outcome NULL／AuthFailure 或 ConfigurationFailure：LocationName NULL、ErrorCode 非空、CompletedAt 非 NULL。
+不得由 SQL UNKNOWN 放行不合法組合。Hash 限完整64字元0～9/a～f，拒絕 padding／空白／大寫；版本不得為空白。精確錯誤碼批准與版本解析由模組／writer 核對，不以長度或 NOT NULL 代表業務核准。
+Pending owner 可 NULL；Processing／Completed／Failed owner 必須非 NULL。owner FK 不證明合法寫入權；交易核對 GEO checkpoint、原 invocation、Job／Image、來源／版本及 rowversion。Completed／Failed 保留提交 owner，跨 Job 消費不更換 owner。Completed 業務結果不可覆寫；同 key Failed 不自動重開或移交，不新增 Result Attempt 表。PK／FK／CHECK 不自行保證上述不可變與跨表語意。
+
+### processing_geo_inputs
+
+| 欄位 | 型別／Nullability／Key |
+|---|---|
+| JobId | BIGINT NOT NULL PK／FK → processing_original_inputs.JobId，NoAction |
+| MetadataResultId | BIGINT NOT NULL FK → image_metadata_results.Id，NoAction |
+| GeoRuleVersion | VARCHAR(50) NOT NULL，非空、核准且可解析 |
+| InputFingerprint | CHAR(64) NOT NULL，精確小寫 SHA256 |
+
+版本／hash CHECK 同上。不加入 Context JSON、Path 或 retry counter；原 EXIF MetadataRuleVersion／fingerprint／SourceSHA256 由不可變來源查回。
+首次 GEO T2 沿核准執行鏈選定來源，核對 EXIF 已提交、同 Image／原內容／Workflow；綁定與 Running Invocation 同交易保存或回滾。既有綁定只能比對完全一致，不 upsert 改來源。Resume／ManualRetry 沿 Run.JobId 找原綁定；Binding 不授予 Result owner。
+Canonical 欄位、Null 與順序以 MOD-03 B-1b-01 補充為準，schemaVersion 由 serializer 產生，不加資料庫欄位。Completed GEO ErrorCode 一律 NULL，TransientExhausted 的錯誤碼只存原 Failed History；結果／History／checkpoint 同 T3。
+缺綁定不 backfill、mismatch 不換最新、commit unknown 先核對持久證據，不僅憑核對失敗關閉 Running。診斷碼／解除阻擋／Provider Manifest／API 展示仍待決；新增表仍僅存在於規格，未解除 F-04-01、N-01／N-02。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。

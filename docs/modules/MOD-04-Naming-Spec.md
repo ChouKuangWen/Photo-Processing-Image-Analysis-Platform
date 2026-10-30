@@ -3167,6 +3167,13 @@ NamingRequest含BatchId、Template、RuleVersion、CollisionPolicy、InputFinger
 Start預設1、>=0，Increment沿用MVP固定1，checked BIGINT；digits只padding、不截斷。重複ImageId/跨Batch/overflow/非法空或reserved名/path traversal拒絕。extension來自OriginalFileName，已含同extension不再加，矛盾extension拒絕。Preview非强制且零寫入；Apply重新校驗凍結input。
 collision候選最多100（原名第一個、99穩定suffix），可設定、未效能驗證；request內衝突同樣reservation/no-overwrite。Skip是顯式Item終態，不是artifact Success；NAMING/FILE_RENAME checkpoint以Skipped完成，不將任意Skip當Job完成。100耗盡FILENAME_COLLISION Permanent Failed，RENAME_FAILED安全message寫artifact creation failure。
 
+## B-1b-01 核准補充：Naming 的 Metadata／GEO 來源
+
+本節優先於前文同題共享 Metadata 地名來源描述；僅為文件對齊，不改 Naming Public API、Storage Signature 或原操作契約。
+EXIF 與 GEO authority 分離，Naming 的 LocationName 必須來自同一核准來源鏈的 Completed image_geo_results，並核對其 MetadataResultId、版本、fingerprint 與已提交證據，不按最新時間任選。
+MissingGPS／InvalidGPS／TransientExhausted 的 UnknownLoc 僅能來自核准的 Completed GEO 決策結果；Pending／Processing 或 Permanent Failed 不能冒充 fallback。ResolvedInput 凍結後不隨 GEO 新版本更新，Resume／ManualRetry 沿原業務輸入。
+B-1b-01 不定稿 Naming input 建立時機或 Provider，也不擴大清理／補償授權；實際交接仍待後續審查。F-04-01、N-01／N-02 保留。
+
 ## 操作與crash恢復
 
 保存Prepared與target reservation→Create artifact→Inspect核對receipt/source/target→T3保存result/checkpoint/History/Primary投影→commit後通知。Storage與DB不在同一transaction；未知結果NeedsReconciliation且不執行。已建立但未保存SQL結果須補T3、不重建。shutdown同Run/Input/OperationId恢復，人工Retry新Run沿用原Naming input，結果重用須Inspect，不新增第二份artifact。

@@ -1449,6 +1449,13 @@ Build
 
 全部完成後才算 Quality Module Done。
 
+# B-1b-01 核准補充 — QUALITY 的 EXIF Authority
+
+本節補充並優先於同題的共享 Metadata 來源描述（包含下方保留的「最終核准契約 — F-05」章），不改品質公式、API 或已核准錯誤規則。
+QUALITY 以已提交且不可變的 image_metadata_results 作為 Metadata 有效性、Orientation、原始 provenance 的來源；quality_results.MetadataResultId 指向此 EXIF authority，不以 ImageAnalysis/current projection 或最新 Metadata 代替。
+GEO LocationName 不屬 Metadata 六項有效性分數。GEO Completion 仍須符合既有 Workflow gate；Permanent Failure 不因品質計算不使用地名就允許跳過。來源缺失／版本不符不能當成六項皆缺。
+首次 QUALITY T2 固定 MetadataResultId 與來源版本的持久綁定仍屬後續 B-1b 工作，本章不宣稱已完成。無新增 QUALITY Canonical Schema、Mapping 或實作；F-04-01、N-01／N-02 保留。
+
 # 最終核准契約 — F-05（文件審核版）
 
 quality-rules-v1；保留Resolution/Sharpness/Exposure/Metadata/Compression權重25/30/15/10/20。原始解碼/Orientation/gray遵循MOD-06 reference規則，Quality分析視圖長邊縮至<=1024、不放大，area resize同數值定義；尺寸至少能產生有效分析樣本。必需影像資料損壞、有效內部Laplacian樣本不足或JPEG table不可解析時Permanent QUALITY_INPUT_INCOMPLETE/INVALID_IMAGE，不猜分、不把未完成結果寫Completed。

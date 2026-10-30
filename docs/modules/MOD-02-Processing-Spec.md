@@ -1801,6 +1801,24 @@ Assessment 後、T1 前已知來源改變時，不得用舊 assessment Claim；�
 - F-04-01 僅完成本章原圖型契約補充，不宣稱整體結案；B-1b／B-1c、其他 Step 的持久引用、具體 Reader／Provider 與 SQL Writer 尚未交付。N-01／N-02 維持。
 - 跨模組文件對齊待另行授權：MOD-03 最終 F-01／F-05 加入 frozen UploadCreatedAt／內容規則來源；MOD-04 最終 F-02 補 Reader 同 bytes／非 Seekable 責任而不改 Signature；MOD-05 最終 F-03 補 frozen HashRuleVersion／ContentLength 與結果 FileSize 核對。本輪不修改這些文件。
 
+## B-1b-01 核准補充：Metadata／GEO 持久來源與交易
+
+本章為人工批准文件契約，同題來源／ownership 缺口以本章及 MOD-03、Database-Schema 的 B-1b-01 補充為準；不改 StepOutcome R3 Signature、T1～T5 提交邊界或既有 Domain 狀態。不是 Provider／Writer／Migration 實作授權。
+
+- image_metadata_results 是不可變的 Completed EXIF authority；image_geo_results 有獨立規則、fingerprint、owner。GEO 不得改 EXIF 的 ResultReference、來源或完成證據。
+- GEO Canonical Schema／Manifest 與結果合法配對集中定義於 MOD-03 B-1b-01；資料表／CHECK 依 Database-Schema 同名補充，不以任意 Context JSON 取代。
+- 首次 GEO T2 沿已核准 Run／Checkpoint／Job 結果鏈選定已提交 EXIF，核對 Image、B-1a 原內容、Workflow 與規則，計算固定 GEO fingerprint；processing_geo_inputs 與本次 checkpoint／Running Invocation 原子保存或回滾。不按最新 CreatedAt／最大 Id 選取。
+- 既有 binding 僅允許完全相同核對，不 upsert 改綁。Resume 沿原 Run；ManualRetry 新 Run 沿同 Job 原輸入。來源遺失不得自動補建或選最新版本。
+- Binding 只證明選定來源，不授予結果寫入權。Result key、owner、rowversion、checkpoint 與原 invocation 分別核對；跨 Job 重用 Completed 結果不更換原 owner，不將 owner 當唯一消費者。
+- 確認 T2 Commit 後才外部 I/O，不把 SQL transaction 延伸到 Geo／Storage 呼叫。T3 unknown 先查原 invocation、checkpoint、結果與提交證據，不盲目重送或重複 aggregate。
+- MissingGPS／InvalidGPS 不呼叫 Provider，保存真實本地決策與相應 History，不新增假的 Success Invocation。
+- 第四 transient 邏輯槽位仍是 Failed History；核准 fallback 結果、Completed／Warning checkpoint 及必要投影同 T3。Completed GEO ErrorCode=NULL，最後失敗碼只由原 History 保存。Permanent auth/config 不以 fallback 掩蓋。
+- 不變更 T5 資格／上限：Geo 耗盡已 Warning 完成，Permanent 不具 ManualRetry 資格；若後續 Step 使 Job 合資格 Retry，核對重用原 GEO 完成結果，不重開它。同 key Failed GEO 不自動重開或移交，不新增 Result Attempt。
+- Timeout／Cancellation 不證明舊 Worker 已停止。Missing／Mismatch／Unknown 採 Fail-Closed；不單憑來源核對失敗將 Running 改為 Failed／Interrupted。只有既有安全恢復契約可處理未終止 owner。
+- Primary Job 沿已提交引用鏈定位結果，不任選最新。Naming 只消費同鏈 Completed GEO，QUALITY 使用不可變 EXIF；未完成／Permanent Failed 不冒充 UnknownLoc。
+- 實際 Provider Manifest、診斷碼／回報接點、排程重查、人工解除阻擋及未關閉 invocation 的具體處置仍為 Implementation Blocker。MOD-03 API Pending／Failed 映射與跨 Run 展示另列 API Contract Pending，不宣稱 API 完整可實作。
+- F-04-01 整體、QUALITY T2 binding、其他 B-1b／B-1c、N-01／N-02 未解除；不將本次文件定稿視為 TASK-04 COMPLETE。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。

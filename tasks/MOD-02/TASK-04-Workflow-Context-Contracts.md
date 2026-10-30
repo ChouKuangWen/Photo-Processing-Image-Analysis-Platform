@@ -179,6 +179,20 @@ Workflow/context/adapter contracts 與純測試一組；feat(mod-02): define wor
 5. F-04-01 仍有 B-1b／B-1c 及其他 Step input reconstruction 缺口；N-01／N-02 不解除。Reader、Provider、SQL Writer、演算法與真實恢復驗收均未由此章交付。
 6. 後續驗收應涵蓋共同內容一致、兩個 Canonical 固定向量、T1 原子性／並行 Claim 不覆寫、原輸入恢復／繼承、missing/mismatch fail-closed；SQL 約束須真實 SQL Server 測試，不以純型別或 Test Double 宣稱完成。本輪不新增或執行測試。
 
+## B-1b-01 核准補充：Metadata／GEO 文件契約
+
+本節只記錄人工批准的 Specification，不授權 Code、Tests、Entity／Mapping、Migration、Provider、Writer 或 API，不改本 TASK 完成狀態。
+正式來源：MOD-03 B-1b-01 定義 EXIF／GEO authority、Canonical v1、Manifest、結果矩陣與 API Pending；Database-Schema 同名補充定義兩張新表及 EXIF authority 調整；MOD-02 同名補充定義交易／恢復責任。上述補充優先於舊同題待決描述，不以本 TASK 覆蓋正式規格。
+
+- EXIF Completed 不可覆寫；GEO 有獨立版本／fingerprint／owner，processing_geo_inputs 固定原來源。所有新增表仍僅是規格，不宣稱 SQL 已交付。
+- 首次 GEO T2 綁定與 Running 原子提交；Commit 後外部 I/O。Resume／ManualRetry 沿原輸入，不按最新時間選取，不 upsert 改來源。
+- Completed GEO ErrorCode=NULL；TransientExhausted 保留原 Failed History，與 Warning 結果及 Completed／Warning checkpoint 同 T3，不增加成功 Invocation。
+- 同 key Failed Result 不重開、不移交 owner，不新增 Result Attempt；ManualRetry 資格／上限與 T1～T5 不變。
+- Missing／Mismatch／Commit Unknown 採 Fail-Closed，不自動 backfill 或關閉 Running。診斷碼／解除阻擋／排程與實際 Provider Manifest 仍為 Implementation Blocker。
+- MOD-04 Naming 固定消費同鏈 Completed GEO；MOD-07 QUALITY 消費不可變 EXIF，地名不計六項分數；QUALITY T2 binding 未完成。
+- MOD-03 Pending／Failed 欄位映射與跨 Run 展示為 API Contract Pending；不改 Route／Response／HTTP Status／Public ErrorCode，不以 IMAGE_NOT_FOUND 代替未就緒。
+- 不修改 MOD-01、Run／Checkpoint、StepOutcome R3；F-04-01 整體、N-01／N-02、B-1b-02／B-1c 仍保留，後續實作須獨立 Review 及人工批准。
+
 ## 15. Out of Scope
 
 實作 EXIF／SHA256 duplicate／pHash／Naming 演算法、任意通用 Context 欄位、修改 Upload input、決定 N-01/N-02。

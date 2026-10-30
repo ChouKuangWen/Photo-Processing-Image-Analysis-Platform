@@ -1455,6 +1455,72 @@ Metadata Module 完成前必須確認：
 - [ ] Playwright E2E Tests
 - [ ] Acceptance Criteria 全部通過
 
+# B-1b-01 核准補充 — EXIF／GEO Lifecycle 與持久輸入
+
+本章為人工批准的 B2 文件契約，同題 Authority、GEO 來源與結果規則優先於既有章節（包含下方保留的「最終核准契約 — F-01／F-05」歷史章）；原有不相關規則保持。僅授權 Specification，不代表資料表、Provider、Migration 或 API 已交付。Physical Schema 以 Database-Schema 的 B-1b-01 補充為準。
+
+## 結果 Authority
+
+image_metadata_results 保留 Id、ImageId、SourceSHA256、MetadataRuleVersion、InputFingerprint、Status／Outcome、EXIF 解析／有效性、原始 FieldProvenance、時間、owner／rowversion 及原唯一鍵。EXIF T3 Completed 後業務內容、輸入身分及完成證據不可覆寫；GEO 不得修改 EXIF ResultReference、Fingerprint、來源證據或 CompletedAt。
+GeoOutcome、LocationName 的正式結果 Authority 移至獨立 image_geo_results，不保留兩套可各自更新的權威來源。這是尚未交付表的規格調整，不是刪除實際 SQL Server 欄位的授權。
+GEO 引用已提交、版本一致的 EXIF Result；有 FK 不代表來源已完成。各自使用獨立 RuleVersion、InputFingerprint、owner；GEO 的寫入不能移交或改寫 EXIF owner。ResultReference 沿用受控 table/id/version，不超過500字元。
+
+## GEO Canonical Input v1
+
+以下為完整欄位與 Ordinal 順序；除座標外全部非 NULL。沿用 CanonicalInputSchema，不改 Public Signature。
+
+| 順序 | 欄位 | 型別／來源 |
+|---|---|---|
+| 1 | contentVersion | String，小寫 SHA256；EXIF SourceSHA256，核對 B-1a 原圖綁定 |
+| 2 | gpsValidity | String，Valid／Missing／Invalid；原 EXIF 有效性 |
+| 3 | imageId | Integer／Int64，正值；EXIF 所屬 Image |
+| 4 | latitude | Decimal 或明確 NULL；EXIF 正規化緯度 |
+| 5 | longitude | Decimal 或明確 NULL；EXIF 正規化經度 |
+| 6 | metadataInputFingerprint | String，原 EXIF 的64字元小寫 SHA256 |
+| 7 | metadataResultId | Integer／Int64，正值；已核對且不可變的 EXIF Result |
+| 8 | metadataRuleVersion | String，原 EXIF 可解析的核准版本 |
+| 9 | ruleVersion | String，固定的 GeoRuleVersion |
+| 10 | schemaVersion | Integer，serializer 自動輸出1，不建立 CanonicalField |
+| 11 | step | String，固定 GEO_LOOKUP |
+| 12 | workflowVersion | String，同 Job 原圖綁定／Run 的固定版本 |
+
+Valid 必須有合法成對座標：緯度[-90,90]、經度[-180,180]，且原始 GPS reference 可核對。Missing／Invalid 的正規化座標均為 NULL；Invalid 原始值、半邊座標或錯誤 reference 保存在不可變 EXIF provenance，不改成合法值或(0,0)。無法從來源證據確認 validity 時阻擋，不猜測。
+Provenance 由 MetadataResultId 及原 EXIF input／版本核對，不直接序列化任意 provenance JSON。版本字串沿用受控非空、長度不超50及精確比對，不 trim／case-fold 冒充同版；本 Schema 不含 GUID。
+Canonical v1 維持 UTF-8 無 BOM、無排版空白、Ordinal、Invariant Decimal、明確 NULL、固定 ASCII-only escaping、不做 Unicode Normalize。InputFingerprint=SHA256(Canonical UTF-8 bytes)；ContentVersion=SHA256(原圖完整 bytes)，兩者不可混用。Runtime Timestamp、TraceId、Attempt／Retry／Resume、Secret、rowversion 不參與業務指紋。
+
+## GeoRuleVersion Manifest
+
+版本必須可解析、受控且不可原地變更，涵蓋 Provider 身分、影響輸出的語言／區域／非秘密請求配置、回應選取與正規化、MissingGPS／InvalidGPS 決策及 TransientExhausted fallback 規則。配置改變業務語意須使用不同版本；不適用項目也須明確記錄，不依主機 Culture 或 Provider 當前預設。
+Manifest 由固定版本定位，不重複加入 Canonical 欄位；不保存認證秘密。未批准或無法解析版本時，不開始相應 GEO Invocation，不填 Provider、語言或 geo-v1 預設。實際 Manifest 及解析交付仍為 Implementation Blocker。
+相同核准規則不保證外部 Provider 的資料／回應不變；Completed Result 才是已提交的穩定結果，不因外部更新而覆寫或重算。
+
+## GEO 結果與 T3
+
+| Status | Outcome | GeoOutcome | LocationName | ErrorCode |
+|---|---|---|---|---|
+| Pending | NULL | NULL | NULL | NULL |
+| Processing | NULL | NULL | NULL | NULL |
+| Completed | Success | Resolved | 有效非空地名 | NULL |
+| Completed | Skipped | MissingGPS | UnknownLoc | NULL |
+| Completed | Warning | InvalidGPS | UnknownLoc | NULL |
+| Completed | Warning | TransientExhausted | UnknownLoc | NULL |
+| Failed | NULL | AuthFailure | NULL | 已核准錯誤碼必填 |
+| Failed | NULL | ConfigurationFailure | NULL | 已核准錯誤碼必填 |
+
+所有終態 CompletedAt 必填，Pending／Processing 為 NULL。Missing／Invalid 不呼叫 Provider，保留真實本地決策證據，不偽造外部服務成功或額外 Success Invocation。
+TransientExhausted 的最後錯誤碼只由原 Failed Invocation History 保存，Completed GEO Result 的 ErrorCode 必為 NULL。原 Failed History、Warning fallback 結果、Completed／Warning checkpoint 及必要投影同一 T3，不拆提交、不增加成功 attempt。尚有預算的 transient failure 按原 retry 規則處理，不提前形成 Failed terminal result。
+Auth／Configuration Permanent Failure 不用 fallback 掩蓋；Failed 結果／History／checkpoint 與必要 Run／Job 終止同 T3，EXIF 完成結果保持不變。精確持久診斷碼未批准的路徑仍阻擋實作，不借用通用 API ErrorCode 或新增代碼。
+
+## 持久來源與內部消費
+
+首次 GEO T2 沿核准 Run／Checkpoint／Job 鏈選定 EXIF，不取最新 CreatedAt 或最大 Id；processing_geo_inputs 同 T2 保存／核對原 MetadataResultId、GeoRuleVersion、InputFingerprint 與 Running Invocation，確認 Commit 才進行外部 I/O。完整交易／Recovery 規則見 MOD-02 B-1b-01 補充。
+Primary Job 沿已提交引用鏈定位 EXIF／GEO，跨 Job 重用仍核對來源／版本／提交證據，不藉重用改 owner。Naming 使用同鏈 Completed GEO，QUALITY 使用不可變 EXIF 的有效性／Orientation／provenance；GEO 未完成或 Permanent Failed 不冒充 UnknownLoc fallback。
+
+## MOD-03 API Contract Pending 與範圍限制
+
+GET /api/v1/images/{imageId} 的 Route、Request／Response、HTTP Status 及 Public ErrorCode 不變。Pending／Failed 的 locationName 映射、多 Run／歷史結果展示策略仍未批准；不按最新時間任選，不以 IMAGE_NOT_FOUND 取代 Metadata 未就緒，不宣稱 API 已可完整實作。
+診斷接點、排程重查、人工解除阻擋與未關閉 invocation 處置仍待決；具體 Provider、Reader、SQL Writer、來源綁定實作尚未交付。F-04-01 整體、N-01／N-02 未解除，不開始 B-1b-02／B-1c。
+
 # 最終核准契約 — F-01／F-05（文件審核版）
 
 本章依使用者F-01～F-08核准及最後補充同步，取代前文同題的舊待決策描述；不是實作／測試PASS。不修改MOD-01 mapping。
