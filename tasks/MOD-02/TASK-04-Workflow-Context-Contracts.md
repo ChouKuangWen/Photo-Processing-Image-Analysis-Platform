@@ -217,6 +217,21 @@ Workflow/context/adapter contracts 與純測試一組；feat(mod-02): define wor
 - T2確認提交才外部I/O；T3／unknown／Inspect核對原持久證據，SQL不跨Storage；Resume／ManualRetry不改來源、不建第二Artifact，不改T5資格。
 - Provider Manifest／Storage證據與驗收／CollisionEvidence映射／reconciliation／Failed跨Run／Request接點／跨Step版本等仍為Implementation Blockers；F-04-01、N-01／N-02未解除，不開始B-1c，不標TASK-04 COMPLETE。
 
+## B-1c-00 核准補充：Frozen Rule Manifest 文件契約
+
+本節記錄 Option A 的文件批准，優先補足前文未開始 Step 缺持久 RuleVersion 選擇的同題待決文字，不以 TASK 取代正式規格。跨模組權責依 System-Level B-1c-00，交易與四 Workflow 覆蓋依 MOD-02 同名補充，四欄表定義依 Database-Schema；本輪不是 Production／Migration 實作授權。
+
+- processing_rule_manifest_bindings：JobId PK／FK NoAction、WorkflowVersion、ManifestId、ManifestChecksum；每 Job 一份不可變引用，多 Job 可共用。同 Job 重複僅接受完全一致，同 ManifestId 不同 checksum 必須拒絕；PK／FK／CHECK 不證明不可更新、跨表相容或資源存在。
+- Manifest 固定格式版本、Workflow 類型／版本、實際 StepOrder、RuleVersion／必要 ProfileVersion、Provider／TargetPolicy 及子 Manifest 不可變引用與校驗資訊。checksum 是原始發布 UTF-8 bytes 的 SHA256，不是 Step fingerprint 或核准／執行權證明，不使用可變 alias。
+- 受控發布須固定可驗證格式並保留原 bytes、子資源與歷史版本；確認原規則／Engine／Profile 仍可執行。解析不能依部署更新重指版本，不自動清理、升級或補舊 Job。實際格式資源、保存與核准解析能力未交付仍阻擋。
+- T1 前唯讀核對完整覆蓋／checksum／核准與可執行版本，精確核對 Naming Request.RuleVersion 及既有來源；缺必要版本不 Claim。首次 T1 同交易保存 Manifest Binding、B-1a 必要綁定、Claim／Active Run／首個 Running，Commit 確認後才執行；SQL 不跨長時間載入或外部 I/O。
+- T2 取原 Manifest 規則，再按已核准契約具體化實際來源；不預造未產生的 ResultId、SnapshotId、QualityResultId 或後續 Running。Manifest 不包含集合成員、Runtime Identity、Secret 或任意 Context JSON。
+- Resume 沿原 Run；合資格 ManualRetry 新 Run 沿同 Job Manifest。既有 Step Binding 必須一致，缺失／不符／不可解析 Fail-Closed，不讀最新版、不 backfill。Commit Unknown 先查原提交證據；版本問題不證明舊 Invocation 停止，不能自行關閉或接管。
+- Naming／DuplicateDetection／Analysis／Full 只涵蓋正式定義的實際 Step；NAMING 沿原 Request，Manifest 不取代 Template／Item／原圖。WorkflowVersion 相同不表示規則組合相同。
+- B-1a／B-1b 保留原業務來源責任；既有 Canonical／Result Unique Key 不變，不自動將 ManifestId 加入 fingerprint，不新增 Result Attempt。完成重用仍核對完整輸入、版本、Owner、History。
+- N-01、N-02、EXACT 候選及 NoMatch、VISUAL 明細及 Job Binding、VERSION 範圍及 QualityResult 集合、Manifest Application／Repository／Registry、F-04-01 其他來源／Recovery 仍是未決或未交付依賴。MOD-08 最終 F-06 優先，推薦 membership snapshot 整體／群組範圍留 B-1c-03 決策，不改公式。
+- 文件定稿不等於 TASK-04 COMPLETE 或 Analysis／Full READY FOR IMPLEMENTATION；後續實作須獨立 Review 與批准。本輪不建立 Entity、Mapping、Migration、Provider、Registry 或 Tests，不開始 B-1c-01～03／B-2。
+
 ## 15. Out of Scope
 
 實作 EXIF／SHA256 duplicate／pHash／Naming 演算法、任意通用 Context 欄位、修改 Upload input、決定 N-01/N-02。

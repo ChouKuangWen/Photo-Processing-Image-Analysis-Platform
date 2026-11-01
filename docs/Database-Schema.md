@@ -460,6 +460,27 @@ NAMING T3建立Item Reservation與TargetName／結果同提交；FILE_RENAME T2�
 
 所有hash非NULL時須精確64字元小寫0-9/a-f，拒絕padding／非法長度／大小寫寬鬆比對；必要版本、reference與名稱拒絕空白及超長。JSON格式CHECK不是Evidence已核准或來源一致性的證明。T2／T3與Owner、History、Primary投影依MOD-02／MOD-04補充，SQL不跨Storage I/O；ResultReference分Item與Operation，不以row存在冒充Completed。N-01／N-02／F-04-01及Storage證據／Recovery等Remaining Blockers保留，未授權Migration。
 
+## B-1c-00 核准補充：Frozen Rule Manifest Binding
+
+本節依 System-Level B-1c-00 定義 Option A 的最小持久引用，優先補足舊文「未開始 Step 缺少持久規則選擇」同題缺口，不改 B-1a／B-1b 的具名輸入表或結果唯一鍵。僅 Schema Specification，尚未建立 EF Entity、Mapping、Migration 或 SQL 資料表。
+
+### processing_rule_manifest_bindings
+
+| 欄位 | 型別／Nullability | 約束與用途 |
+|---|---|---|
+| JobId | BIGINT NOT NULL | PK；FK → processing_jobs.Id，DeleteBehavior.NoAction |
+| WorkflowVersion | VARCHAR(50) NOT NULL | 核准且可解析的 Workflow 版本 |
+| ManifestId | VARCHAR(100) NOT NULL | 受控發布的不可變 Manifest 身分，不是可變 alias |
+| ManifestChecksum | CHAR(64) NOT NULL | SHA256(原始發布 UTF-8 bytes)，精確小寫 hex |
+
+CHECK 必須拒絕空白 WorkflowVersion／ManifestId；版本／識別不得截斷或補預設。ManifestChecksum 須精確 64 字元且只允許 ASCII 0-9、a-f，以明確 binary 語意驗證，不能因寬鬆 collation 接受大寫、非 ASCII 或 padding。CHAR 的型別寬度不等於格式驗證。所有欄位非 NULL；不新增 Status、Owner、rowversion、Retry／Attempt Counter、結果引用、JSON 或原圖資料。
+每 Job 最多一筆，整份 Binding 建立後不可變，包括 WorkflowVersion；同 Job 重複請求只允許四欄完全一致，不用 UPDATE／upsert 換版本。多 Job 可共用同 Manifest，因此 ManifestId 不設 UNIQUE。ManifestId 永遠不得對應不同 checksum；受控發布／解析流程及交易核對必須拒絕此衝突，不能將一般索引或本表 PK 當成全域發布一致性證明。
+WorkflowVersion 必須與 Job 所屬 Workflow、Run、processing_original_inputs 及 Manifest 內容一致。既有 processing_jobs 保存 Workflow 類型而非 WorkflowVersion；本節不為 Job 新增欄位，所稱 Job 版本是本 Binding 固定的版本。跨表／資源一致性由核准交易及解析流程驗證，PK／FK／CHECK 不能證明不可更新、核准來源、內容存在或規則可執行。
+
+首次 T1 與原 Claim／Active Run／第一個 Running Invocation、B-1a 必要綁定同交易 INSERT 或一致核對；競爭者不得寫出矛盾版本。T1 前完成唯讀完整 Manifest 驗證，SQL transaction 不跨長時間資源載入或 Storage I/O。T2 取原 Manifest 規則並核對既有 Step Binding，不預造上游結果 FK。Resume 沿原 Run，ManualRetry 新 Run 沿同 Job Binding；缺失／不符／Commit Unknown 先核對原證據並 Fail-Closed，不自動 backfill、重選或關閉 Running。
+完整 Manifest 及子資源採 System-Level 所定受控不可變發布／歷史保留，不將內容複製成任意 Context JSON。相同 WorkflowVersion 不等於相同規則組合；相同 Result Unique Key 不等於相同完整 InputFingerprint。既有 Canonical 欄位及結果鍵不變，不加入 Result Attempt。
+實際歷史保存／解析／Application／Repository／Registry 接點、N-01／N-02、EXACT／VISUAL／VERSION 集合來源、診斷及 F-04-01 Recovery 仍待交付或決策。後續 Schema 實作須另獲批准並以新增式 Migration 與真實 SQL 測試驗證，本輪不授權遷移。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。

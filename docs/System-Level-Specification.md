@@ -2773,3 +2773,29 @@ D-13只延後新Export能力，完整原規格保留；MOD10未通過完整實�
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。
 這是規格缺口而非已證實runtime deadlock。保持Analysis/Full完整實作准入BLOCKED，核心TASK規劃與Naming不因本缺口阻擋。推薦下一次針對N-02核准把VISUAL候選等待納入既有T2-W（讓出Worker、持久deadline、版本核對、無Running/不消耗Retry、ready後原子開始）；VISUAL等待budget與逾時政策需集中決定，不能擅自挪用Recommendation120秒或改Step順序。本輪不實作、不建立TASK、不改已核准checkpoint wait範圍。
+
+## B-1c-00 核准補充：Job-level Immutable Rule Manifest Reference
+
+本節依人工批准定義跨 Step 的凍結規則來源，優先補足先前 B-1a／B-1b「尚未執行 Step 的原規則缺持久依據」同題待決文字；不取代各模組業務規則、輸入選擇或結果契約。這是文件批准，不代表 Entity、Migration、Registry、Provider 或 Recovery 已交付。
+
+### 規則身分與發布責任
+
+每個 Job 在首次 T1 綁定一份不可變 Rule Manifest。WorkflowVersion 固定流程定義，不單獨識別規則組合；相同 WorkflowVersion 可以有不同 ManifestId。ManifestId 不得是 latest alias、可變設定名稱，或可被重新指向目前部署設定的入口。
+Manifest 必須包含格式版本、ManifestId、Workflow 類型、WorkflowVersion、完整且有序的實際 Step／StepOrder、各 Step RuleVersion、必要 ProfileVersion、影響業務輸出的 Provider／TargetPolicy 具名版本引用，以及每個子 Manifest 的不可變身分與內容校驗資訊。不得預存尚未產生的 ResultId／SnapshotId／QualityResultId、候選集合、Invocation Identity、Secret、原圖 bytes 或任意 Context JSON。
+每個發布格式版本必須有固定且可驗證的具名結構、欄位型別、必要／可空欄位、順序與序列化規則；發布時一次產生固定 UTF-8 bytes 並保留原檔。消費端校驗原始發布 bytes，不將解析後物件依本機序列化器重新輸出作為內容身分，也不自行正規化文字、換行或格式。格式版本、受控發布檢查與具體資源尚未交付前，解析路徑仍阻擋；本章不新增序列化 Public API 或任意業務版本值。
+ManifestChecksum = SHA256(已發布 Manifest 的固定 UTF-8 bytes)，精確 64 字元小寫 hex；不同環境必須取得同一份 bytes。它不等於 Step InputFingerprint，也不證明規則已核准或 Job 已取得執行權。同 ManifestId 必須永遠對應同內容及 checksum；內容改變須使用不同身分，不默默替換。子 Manifest 也須以不可變身分及校驗資訊固定，不能只鎖住根檔案而讓其依賴指向最新版。
+
+MVP 採受控發布的不可變版本資源。發布／部署維護責任包含保留原始 bytes、所有引用的子 Manifest 與必要歷史版本，驗證核准來源及 checksum，並確認原 Rule／Engine／Profile 實作仍可執行。新部署不得悄悄重指舊身分、升級舊 Job、以最新規則 backfill 或自動清理歷史資源。SQL 保存 ManifestId 不等於歷史資源已可靠保存；缺原內容、校驗不符、版本不可解析或原實作不可執行時 Fail-Closed。實際保存、解析與核准接點仍是 Implementation Blocker。
+
+### 原子綁定與責任邊界
+
+T1 前唯讀解析完整 Manifest，核對核准 Workflow 的所有實際 Step、checksum、核准來源、規則／Profile／Provider 可解析及可執行性；不得填 latest／default 或偽造尚未批准的引擎版本。NAMING 必須與已保存 Request.RuleVersion 精確一致，既有 B-1a／B-1b 來源只能核對，不能覆寫。
+首次 T1 在既有短 SQL transaction 中原子保存 Job Manifest Binding、B-1a 必要原圖／Step Binding、Job Claim、Active Run 與第一個 Running Invocation；Commit 確認後才執行 Adapter，不提前建立後續 Step 的 Running Log。長時間 Manifest 載入／外部 I/O 不包進 SQL transaction；交易核對已驗證的不可變身分與既有持久資料。缺版本或覆蓋不完整即不得 Claim，T1～T5／T2-W 的既有邊界不變。
+Resume 沿原 Job／Run／Manifest；合資格 ManualRetry 的新 Run 沿同 Job Manifest，不改 T5 資格。各 Step 首次 T2 從原 Manifest 取規則，再依核准契約具體化上游結果來源；未產生的 ResultId 不需在 T1 預造。已有 Step Binding 必須一致，來源或版本衝突即阻擋，不重選最新版。
+歷史 Job 缺 Binding 不自動補證；原 Manifest 缺失或不能執行時阻擋該 Job 相關路徑，歷史遷移另行批准。Commit Unknown 先核對原持久提交證據，不重新選 Manifest 或再次 Claim。版本衝突、Timeout、Cancellation 不證明 Running Invocation 已停止，不授予改寫終態、重試或接管 Owner 的權限。
+
+### 仍保留的限制
+
+Job Manifest 管規則選擇；B-1a 管原圖及 WorkflowVersion；B-1b 管實際結果來源與 Naming Request／Item／Operation／Reservation；Run／Checkpoint／History 管執行權與 Invocation。不得修改既有 Canonical Schema、Result Unique Key 或自動將 ManifestId 加入 Step InputFingerprint；相同結果鍵仍須完整 Business Input、版本、Owner、History 核對，衝突無核准處置時 Fail-Closed，不新增 Result Attempt。
+N-01 Decoder／ICC／Engine 精確版本、N-02 VISUAL 候選等待、EXACT 候選／NoMatch、VISUAL Snapshot 明細／Job Binding、VERSION 範圍／QualityResult 集合、Manifest 保存解析實作及 F-04-01 其他來源／Recovery 缺口均保留。不宣稱 Analysis／Full 或整個 TASK-04 READY FOR IMPLEMENTATION。
+MOD-08 最終 F-06 優先於早期同題描述；B-1c-03 仍須確認推薦 membership snapshot 是整個 visual_snapshots.Id 的所有 members，或另有核准群組範圍。本章不選 Group Scope、不改公式或唯一鍵，也不批准任意跨 Group 混算或每 Group 獨立計分。

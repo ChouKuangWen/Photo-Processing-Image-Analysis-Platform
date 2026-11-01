@@ -1851,6 +1851,56 @@ Assessment 後、T1 前已知來源改變時，不得用舊 assessment Claim；�
 - Resume沿原Run／Item／Operation；合資格ManualRetry沿原業務輸入，不建第二份Artifact、不接管Completed owner。Failed Operation的跨Run恢復未批准；缺來源不backfill。未開始Naming從原靜態集合與原規則首次具體化，不假設已有ResolvedInput。
 - Provider Manifest、可信無副作用證據、CollisionEvidence Adapter映射、Reader／Receipt驗收、reconciliation、Request接點、Frozen RuleVersion跨Step完整性仍阻擋對應實作。N-01／N-02／F-04-01整體未解除，不宣稱TASK-04 COMPLETE，不開始B-1c。
 
+## B-1c-00 核准補充：完整 Workflow 規則凍結
+
+依 System-Level 同名補充採 Job-level Immutable Rule Manifest Reference，Schema 依 Database-Schema processing_rule_manifest_bindings。此章優先補足先前 B-1a／B-1b 的「尚未執行 Step 缺原 RuleVersion 持久選擇」同題待決；不是宣稱 Provider／Registry 已實作，也不改各模組規則、T1～T5、StepOutcome R3 或已核准 Canonical。
+
+### 覆蓋矩陣
+
+下表數字是 workflow-mvp-v1 的 StepOrder（從 1 開始），「—」代表不包含，不建立假 Step 或規則項目。Profile／Provider 只引用已核准且可解析的版本，未批准即阻擋，不補 latest／default。
+
+| Step | Naming | DuplicateDetection | Analysis | Full | 必須固定的規則選擇 |
+|---|---|---|---|---|---|
+| EXIF_PARSING | 1 | — | 1 | 1 | EXIF RuleVersion |
+| GEO_LOOKUP | 2 | — | 2 | 2 | GeoRuleVersion、核准 Provider／語言／非秘密配置版本 |
+| SHA256_CALCULATION | — | 1 | 3 | 3 | HashRuleVersion |
+| EXACT_DUPLICATE_CHECK | — | 2 | 4 | 4 | EXACT RuleVersion |
+| PHASH_GENERATION | — | — | 5 | 5 | Step RuleVersion、pHash ProfileVersion 及核准 Engine／ICC 子 Manifest |
+| VISUAL_SIMILARITY | — | — | 6 | 6 | VISUAL RuleVersion、Profile 與影響輸出的核准配置版本 |
+| QUALITY_ANALYSIS | — | — | 7 | 7 | QualityRuleVersion、完整分析 Profile |
+| VERSION_ANALYSIS | — | — | 8 | 8 | RecommendationRuleVersion、相容 Quality／pHash 版本條件 |
+| NAMING | 3 | — | — | 9 | 精確沿用已持久化 Naming Request.RuleVersion |
+| FILE_RENAME | 4 | — | — | 10 | FileRenameRuleVersion、Provider／TargetPolicy 具名版本 |
+
+Manifest 保存格式版本、不可變身分、Workflow 類型／版本、上述完整有序規則與子 Manifest 校驗引用。Profile 與 Step RuleVersion 的對應必須可核對，不自行發明模組版本值。WorkflowVersion 只描述流程，不代表規則組合；Manifest 不取代 Request.Template、Item 順序、原圖或之後產生的結果／集合。
+checksum 依固定發布 UTF-8 bytes 計算，格式及歷史保存責任依 System-Level；驗證內容身分後仍須核對核准來源與可執行性。不能只確認版本字串存在，也不能把 checksum 當作 Claim 或完成授權。
+
+### T1／T2 與恢復核對
+
+- T1 前唯讀解析整個 Workflow 所需規則／Profile／Provider，核對覆蓋、順序、checksum、核准來源與執行能力；Naming Request 必須精確相容，既有 B-1a／B-1b 不得改綁。任一必要版本缺失、未批准或不可解析，即不 Claim。
+- 首次 T1 短交易原子保存或一致核對 Manifest Binding、B-1a 必要原圖／Step Binding、Job Claim、Active Run、首個 Running Invocation；確認 Commit 才執行。長時間載入／外部 I/O 在 SQL transaction 外，不提前建立後續 Running 或尚不存在的 MetadataResultId／SnapshotId／QualityResultId。
+- 每個尚未開始的 Step 首次 T2 從原 Job Manifest 解析規則，再按該 Step 已核准來源契約固定實際業務輸入。已有 Step Binding、Checkpoint、Run 版本必須一致；不得以目前設定覆蓋原版本或以新 Manifest 解釋舊 fingerprint。
+
+| 情境 | 持久核對與處置 |
+|---|---|
+| T1 未提交且已確認回滾 | 不具執行權；重新准入仍須核對既有 Request／來源，不假造已綁定版本 |
+| T1 Commit Unknown | 先查原 Binding／Claim／Run／Invocation 提交證據；不換 Manifest 或直接再次 Claim |
+| T1 已提交，後續 Step 從未執行 | 從原 Job Manifest 取得其規則；不要求已有結果引用，不讀最新設定 |
+| Shutdown Resume | 沿原 Job／Run／Manifest，仍需原安全恢復及 Owner 核對 |
+| 合資格 ManualRetry | 新 Run 沿同 Job Manifest 與原業務輸入；不更改 T5 資格／次數 |
+| 缺 Binding、原資源／子資源遺失、checksum 不符、舊實作不可執行 | Fail-Closed；不 backfill、升級或猜原選擇，歷史補證另案批准 |
+| Step Binding 與 Manifest 衝突 | 阻擋相關路徑，保留兩者及原 History，不任選其一覆寫 |
+| T3 Commit Unknown | 核對原結果／Checkpoint／History／Owner；Manifest 不取代提交證據，不重複寫結果 |
+
+SQL 已存引用不代表可恢復；發布方須保留原 bytes、所有子 Manifest 與歷史執行能力。Timeout／Cancellation／版本衝突不證明舊 Invocation 已停止，不自動改 Failed／Interrupted、移交 Owner 或授權重試。
+
+### 相容性與尚未交付事項
+
+Manifest 是規則選擇權威；B-1a 是原圖與 WorkflowVersion，EXIF／GEO／QUALITY Binding 是實際來源，Naming 四表是原 Request／Item／Operation／Reservation，Run／Checkpoint／History 是執行權證據。NAMING 規則不由 Manifest 重新選擇；原 Job Workflow 類型與綁定 WorkflowVersion、Run、B-1a 必須一致，不新增 processing_jobs 欄位。
+不改既有 Step Canonical Schema，不自動加入 ManifestId，不改 Result Unique Key。完成結果重用仍核對完整 Business Input／版本／Owner／History；同 key 不同 fingerprint 或規則無核准處置即 Fail-Closed，不新增 Result Attempt。
+本章只解決規則選擇契約，不解決 EXACT 候選／NoMatch、VISUAL Snapshot 明細／Job Binding、VERSION Snapshot／Group scope／QualityResult 集合。Manifest 固定格式的實際發布資源、歷史保存／核准解析、Application／Repository／Registry 接點尚未交付；Missing／Mismatch 診斷、Reader、Storage 證據及 F-04-01 Recovery 等限制仍在。
+N-01 Decoder／ICC／Engine 精確版本未批准，N-02 VISUAL DependencyWait 未批准；不改 T2-W／Deadline／StepOrder／SQL CHECK，不宣稱 Analysis／Full 或 TASK-04 READY FOR IMPLEMENTATION。MOD-08 最終 F-06 優先，B-1c-03 仍須明確核對推薦 membership snapshot 的整體／群組範圍；不在本章改排名公式或唯一鍵。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。
