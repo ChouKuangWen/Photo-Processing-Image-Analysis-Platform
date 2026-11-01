@@ -1833,6 +1833,24 @@ Assessment 後、T1 前已知來源改變時，不得用舊 assessment Claim；�
 - Input Binding 不授予 Result ownership；owner 是原生產者，不是所有消費者。T3 依 owner＋rowversion 與 History／Checkpoint 原子更新。Failed 不冒充完成，同 key Failed 無核准處置時阻擋，不新增 Result Attempt。
 - N-01 完整 Profile 未批准，不因 quality-rules-v1 公式存在就宣稱可執行；版本不可解析 Fail-Closed。N-02、F-04-01 其他輸入、診斷／未關閉 invocation／Reader 與同 key Failed 處置仍保留。資料表、Provider、Adapter、Writer 尚未由本章交付，TASK-04 不標 COMPLETE。
 
+## B-1b-03 核准補充：Naming／Artifact 交易與結果分離
+
+本節優先補足舊Naming持久輸入／雙Step Skip與碰撞時點描述，依人工批准的MOD-04 B-1b-03及Database-Schema四表補充執行；不改T1～T5、Domain enum、StepOutcome R3、MOD-01或Public API，僅文件定稿。
+- 首次T1前，合法Request與完整靜態Items同準備交易持久保存，不因Preview存在就視為已凍結。缺Template／版本／原順序／Job關聯不Claim，不補造。這不是新增Upload欄位或Claim路徑。
+- NAMING T2核對原Request／Item／B-1a原圖及同Job已提交EXIF／GEO，原子保存ResolvedInput／fingerprint／NAMING owner與Running；TargetName此時NULL。Canonical與日期offset依MOD-04具名schema，不讀最新來源或主機時區。
+- NAMING T3核對owner＋rowversion，原子保存正式TargetName、Item Reservation、命名Result／Checkpoint／History。Reservation尚無OperationId；只有成功取得預留才提交Success目標。候選按原規則、最多100，不由SQL競爭虛構額外模組Invocation。
+- FILE_RENAME僅Create分支的T2核對NAMING Completed／Success、固定TargetName與Item Reservation；建立唯一Prepared Operation、FILE_RENAME owner／InputFingerprint、一次性連結Reservation.OperationId及實際Running Invocation，同commit。確認T2提交後才允許Storage Create，不跨完整Storage I/O。
+- 前段Skip以原NAMING Completed／Skipped及Item Skip證據為依據，固定Skip fingerprint與合法Running；依既有StepOutcome／Checkpoint契約核對本次Invocation及Checkpoint／History提交證據後完成Skipped。不要求Reservation／Operation／Receipt，不呼叫Storage Create，不偽造外部成功或不存在的Invocation History。
+- FILE_RENAME Artifact成功的T3，僅於Inspect核對成功後要求OperationId、immutable payload、ExpectedContentVersion、成功Receipt、TargetReference、原Processing Owner／rowversion與合法Checkpoint／History提交證據；同交易保存結果、Item ArtifactDisposition及必要Primary投影。前段Skip不適用此成功Artifact證據集合；Item.NamingOutcome／owner不變，Secondary不改Primary投影。
+- FILE_RENAME確定後發碰撞的T3保留原OperationId／TargetName／payload，核對可信CollisionEvidence、無本Operation Artifact、無仍可能完成的舊Create及原owner／rowversion；成功Receipt與TargetReference必須NULL，依核准Policy原子提交Skipped或Permanent Failed與合法Checkpoint／History，不覆寫NAMING原Completed／Success。證據不足維持NeedsReconciliation，不關成Skipped／Failed、不更換Operation或跳下一目標；Storage Adapter可信證據未交付仍是Implementation Blocker。
+- NAMING在Operation建立前已因候選耗盡或既有Fail政策Permanent Failed時，不啟動後續FILE_RENAME、不建立Operation，也不製造FILE_RENAME T3或成功History。
+- 前段Naming Skip保存Item證據，NAMING為Skipped；後續FILE_RENAME真實核對該Skip決策並以Skipped完成，不建假Operation／Receipt或成功Invocation。後發碰撞Skip只完成FILE_RENAME Skipped，不倒寫已Completed／Success的NAMING。Artifact unknown不是Skip／Failed。
+- 單Item單Operation；Operation固定後不換候選／payload。後發碰撞須證明無本Operation Artifact、無未結束Create且證據可驗證，Skip政策才Skipped，其他政策FILENAME_COLLISION Permanent Failed；不確定保持NeedsReconciliation。Storage Signature尚不能提供核准證據時該路徑阻擋。
+- Item ResultReference為naming_request_items/{ItemId}/{NamingRuleVersion}；Create結果為naming_operations/{OperationId}/{FileRenameRuleVersion}；前段Skip的FILE_RENAME引用原Item Skip證據及自身checkpoint，不假造Operation。受控reference不是執行權，原Invocation／版本／終態須核對。
+- T2 unknown查原提交後才外部呼叫；Create unknown先Inspect，T3 unknown先查原持久結果／History，不盲目重送。Inspect Complete核對後補T3或重用；Missing仍須舊Create確認停止才同payload重試；Unknown阻擋。Cancellation／Timeout／失聯不證明停止。
+- Resume沿原Run／Item／Operation；合資格ManualRetry沿原業務輸入，不建第二份Artifact、不接管Completed owner。Failed Operation的跨Run恢復未批准；缺來源不backfill。未開始Naming從原靜態集合與原規則首次具體化，不假設已有ResolvedInput。
+- Provider Manifest、可信無副作用證據、CollisionEvidence Adapter映射、Reader／Receipt驗收、reconciliation、Request接點、Frozen RuleVersion跨Step完整性仍阻擋對應實作。N-01／N-02／F-04-01整體未解除，不宣稱TASK-04 COMPLETE，不開始B-1c。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。

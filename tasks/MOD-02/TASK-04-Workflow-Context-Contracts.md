@@ -205,6 +205,18 @@ Workflow/context/adapter contracts 與純測試一組；feat(mod-02): define wor
 - Completed 結果須完整來源／版本／owner 證據才可重用；唯一鍵不等於完整 fingerprint，不跨未核准 WorkflowVersion 等價重用；Failed 同 key 無核准處置即阻擋，不新增 Result Attempt。
 - N-01／N-02／F-04-01 其他 Step、Reader、診斷／未關閉 invocation、跨 Run 未凍結規則與 Failed 結果處置仍保留。新增表僅是 Specification，未交付 EF／SQL；不開始 B-1b-03／B-1c，不標 TASK-04 COMPLETE。
 
+## B-1b-03 核准補充：Naming／Artifact 文件契約
+
+本節記錄人工批准的文件範圍，優先補足先前Naming input未定及雙Step Skip描述；正式業務／Canonical以MOD-04 B-1b-03、四表以Database-Schema、交易以MOD-02同名補充為準，不以TASK取代Specification。不是Production／Migration實作授權。
+- Request與完整靜態Items在首次T1前同準備交易保存，Preview零寫入；缺合法原輸入即阻擋，不改MOD-01或補Template。原集合／順序／Sequence／版本不可變。
+- Item允許尚未形成的ResolvedInput／TargetName為NULL；NAMING T2凍結具名來源，T3保存TargetName與Item Reservation。Naming結果與ArtifactDisposition分離，不以假值補欄位。
+- FILE_RENAME僅Create分支的T2核對NAMING Completed／Success、固定TargetName與Item Reservation，原子建立唯一Prepared Operation、一次性連結Reservation、保存fingerprint／owner與實際Running；確認Commit才允許Storage Create。前段NAMING Completed／Skipped只核對原Item Skip證據及本次合法Checkpoint／History，不要求Reservation／Operation／Receipt、不呼叫Create、不偽造Invocation。
+- FILE_RENAME T3分支：Artifact成功經Inspect核對Operation／immutable payload／ExpectedContentVersion／Receipt／TargetReference／owner＋rowversion及合法Checkpoint／History後，同交易保存結果與必要Primary投影；前段Skip沿核准StepOutcome／Checkpoint契約提交Skipped，不建假Operation；確定後發碰撞核對CollisionEvidence、無本Operation Artifact、無未結束Create及原owner＋rowversion，Receipt／TargetReference必須NULL，依既有Policy提交Skipped或Permanent Failed，不改NAMING原Success。證據不足保持NeedsReconciliation，不換Operation／目標；Adapter證據不足仍阻擋。NAMING已因候選耗盡或Fail政策Permanent Failed時，不啟動FILE_RENAME、不建Operation或FILE_RENAME T3／成功History。
+- Request、NAMING、FILE_RENAME三份Canonical與成員子schema按MOD-04固定欄位／Ordinal；schemaVersion自動，日期使用原來源offset，原檔名Token無副檔名，不納入runtime／Path或未產生TargetName。
+- 100穩定候選限Operation前；後發確定碰撞Skip政策Skipped、其他Permanent Failed；無核准無副作用證據即NeedsReconciliation，不猜碰撞。前段Skip可使兩StepSkipped，後段不覆寫NAMING History，不偽造Artifact／成功Invocation。
+- T2確認提交才外部I/O；T3／unknown／Inspect核對原持久證據，SQL不跨Storage；Resume／ManualRetry不改來源、不建第二Artifact，不改T5資格。
+- Provider Manifest／Storage證據與驗收／CollisionEvidence映射／reconciliation／Failed跨Run／Request接點／跨Step版本等仍為Implementation Blockers；F-04-01、N-01／N-02未解除，不開始B-1c，不標TASK-04 COMPLETE。
+
 ## 15. Out of Scope
 
 實作 EXIF／SHA256 duplicate／pHash／Naming 演算法、任意通用 Context 欄位、修改 Upload input、決定 N-01/N-02。

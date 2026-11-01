@@ -3179,3 +3179,124 @@ B-1b-01 不定稿 Naming input 建立時機或 Provider，也不擴大清理／�
 保存Prepared與target reservation→Create artifact→Inspect核對receipt/source/target→T3保存result/checkpoint/History/Primary投影→commit後通知。Storage與DB不在同一transaction；未知結果NeedsReconciliation且不執行。已建立但未保存SQL結果須補T3、不重建。shutdown同Run/Input/OperationId恢復，人工Retry新Run沿用原Naming input，結果重用須Inspect，不新增第二份artifact。
 reservation對scope內provider-normalized TargetKey唯一；Local實際case-sensitivity/Unicode與GCS策略由adapter契約核對，不能只用memory Exists→Create。receipt須可證明本operation與content，不以單純目標存在當成功。
 reapply、Completed重分析、保留／清理延後；未核准不得自動清理artifact/reservation/孤立物件，不以Compensation刪原檔或artifact。部署須承擔storage增長，沒有修復/unblock/cleanup寫API。本輪只規格，不建TASK/實作/遷移。
+
+# B-1b-03 核准補充 — Naming／Artifact 分階段持久契約
+
+本章依人工批准，優先於前文同題的 Item 必填時機、雙 Step Skipped、碰撞候選時點及 Prepared／Reservation 描述。只定稿 Specification，不交付 EF／SQL、Provider 或 Public API，不修改 MOD-01、T1～T5 或 StepOutcome R3。
+
+## Request、靜態 Item 與命名結果
+
+Job 建立後、首次 T1 Claim 前，Request 與完整靜態 Item 集合須同一準備交易提交或回滾；這不是 Claim，不改 Upload Job 生成契約。Request 固定 BatchId、Template、RuleVersion、CollisionPolicy、SequenceStart；Item 固定 RequestId、ImageId、JobId、Ordinal、Sequence、OriginalExtension、OriginalFileName。Ordinal 從0連續對應原 Request 順序，Sequence=checked(SequenceStart+Ordinal)，Increment固定1；不增刪成員或重新排序。OriginalFileName 是不含副檔名的 Token 靜態快照，OriginalExtension 依既有副檔名規則保存，不用執行平台的任意 path 解析替代。
+Preview 零寫入，不是凍結證據；無合法 Request 時阻擋，不補造 Template、Item、順序或版本。已保存集合與其 fingerprint 必須可完整重建，不能只有 hash 沒有成員資料。
+Pending Item 的 ResolvedInput／TargetName 尚未形成，允許 NULL。NAMING T2 核對同 Job 已提交 EXIF／GEO 結果鏈、原圖、版本，原子凍結 ResolvedInput、InputFingerprint、NAMING Owner 與 Running。ResolvedInput 使用下列具名欄位及已核對來源，不是任意 Context JSON；不以假地名、空字串或假 TargetName 補值。
+NAMING T3 才原子保存正式 TargetName、Item Reservation、Result／Checkpoint／History；Skip／Failed 不建立假的成功目標。Item.NamingStatus／NamingOutcome 表示命名結果，ArtifactDisposition 表示後續 Created／Skipped／Failed，兩者分離。已完成命名內容、fingerprint、owner 不被 FILE_RENAME 或新 Run 覆寫；Item 狀態不是 Checkpoint 狀態的逐項鏡像，安全恢復不能抹除已凍結輸入。
+
+## Canonical v1 具名 Schema
+
+下列表格即輸出 Ordinal 順序；Integer 為有號 Int64（Ordinal受既有INT範圍限制），GUID為小寫D格式String，hash為64字元小寫SHA256。版本是受控非空、至多50字元且須可解析；必要ID正值、Ordinal／Sequence非負。schemaVersion固定1由 serializer 自動輸出，不建立 CanonicalField。沿用無BOM、固定ASCII escaping、Invariant、明確NULL、無Unicode Normalize／Case Fold，不變更 Canonical Public API。
+
+### A. Request InputFingerprint
+
+| 欄位（依序） | 型別／來源；全部非NULL |
+|---|---|
+| batchId | String GUID；Request.BatchId |
+| collisionPolicy | String；固定既有 NumericSuffix／Sequence／Skip／Fail |
+| memberFingerprints | String Array；完整靜態 Items 按 Ordinal 的成員指紋 |
+| ruleVersion | String；Request.RuleVersion |
+| schemaVersion | Integer 1；自動 |
+| sequenceStart | Integer；Request.SequenceStart，非負 |
+| template | String；Request.Template |
+
+每個成員以固定 schema：imageId(Integer)、jobId(Integer)、ordinal(Integer)、originalExtension(String)、originalFileName(String)、schemaVersion(Integer1自動)、sequence(Integer)，按此 Ordinal 順序生成 canonical bytes 再SHA256。全部非NULL；不是任意object陣列或把未定JSON字串塞進指紋。原始成員值由靜態 Item 重建，hash array保留業務順序。Request與成員不依賴尚未產生的GEO／TargetName，也不與Item的NAMING fingerprint形成循環。
+
+### B. NAMING InputFingerprint
+
+| 欄位（依序） | 型別／來源；全部非NULL |
+|---|---|
+| cameraModel | String；EXIF有效值或既有UnknownCamera規則 |
+| collisionPolicy | String；原Request |
+| contentVersion | String hash；B-1a原圖，與EXIF來源一致 |
+| geoInputFingerprint | String hash；原Completed GEO |
+| geoResultId | Integer；原Completed GEO Id |
+| geoRuleVersion | String；原GEO版本 |
+| imageId | Integer；Job／Item／來源一致 |
+| itemId | Integer；靜態Item.Id |
+| locationName | String；原Completed GEO地名或其核准UnknownLoc決策 |
+| metadataInputFingerprint | String hash；原不可變EXIF |
+| metadataResultId | Integer；EXIF Id，等於所選GEO.MetadataResultId |
+| metadataRuleVersion | String；原EXIF版本 |
+| ordinal | Integer；靜態Item |
+| originalExtension | String；靜態Item |
+| originalFileName | String；靜態Item，不含副檔名 |
+| requestId | String GUID；原Request.Id |
+| requestInputFingerprint | String hash；由完整原集合重建核對 |
+| ruleVersion | String；原Naming RuleVersion |
+| schemaVersion | Integer 1；自動 |
+| sequence | Integer；靜態Item |
+| step | String；固定NAMING |
+| takenAt | UtcInstant；EXIF ResolvedTakenAt所代表instant |
+| takenAtOffsetMinutes | Integer；實際命名使用的原來源offset分鐘 |
+| template | String；原Request |
+| timeSource | String；原EXIF時間來源 |
+| workflowVersion | String；B-1a／原Run固定版本 |
+
+ResolvedInput是上述具名值的受控snapshot，需核對FK關聯之外的Completed／來源／版本／提交證據；不任選最新EXIF或GEO。Metadata缺失不當作可替換原來源；UnknownLoc只來自核准Completed GEO，Permanent Failed不冒充fallback。
+takenAt使用Canonical UTC；日期Token（TakenAt／TakenDate／TakenTime／Year／Month／Day）先依takenAtOffsetMinutes還原來源民用日期時間，再以既有格式及Invariant輸出。可信EXIF使用核准EXIF offset；UploadCreatedAt fallback使用原保存Upload時間offset，不用主機時區、目前Culture或猜測缺少的offset。
+TargetName是輸出，不納入NAMING指紋。RuleVersion必須解析到不可變命名規則、候選順序／上限及本章日期語意；解析不到原核准規則就阻擋，不能讀最新配置。Provider target policy亦須在選候選前具固定可重建來源，不能T3選目標後再換policy；具體Manifest仍為實作阻擋。
+
+### C. FILE_RENAME InputFingerprint
+
+| 欄位（依序） | 型別／來源 |
+|---|---|
+| contentVersion | String hash；原內容，等於Create的ExpectedContentVersion |
+| imageId | Integer；原Item／Job |
+| itemId | Integer；原Item |
+| mode | String；Create或Skip |
+| namespaceId | String；固定邏輯namespace；Skip為NULL |
+| namingInputFingerprint | String hash；已提交NAMING來源 |
+| operationId | String GUID；唯一Operation；Skip為NULL |
+| providerId | String；固定provider；Skip為NULL |
+| ruleVersion | String；原核准FILE_RENAME規則版本 |
+| schemaVersion | Integer 1；自動 |
+| step | String；固定FILE_RENAME |
+| targetKey | String；provider-normalized邏輯scope key；Skip為NULL |
+| targetName | String；已提交Item.TargetName；Skip為NULL |
+| targetPolicyVersion | String；固定可解析policy；Skip為NULL |
+| workflowVersion | String；原固定版本 |
+
+除表中六個Skip nullable欄位外均非NULL；Create全部非NULL。Skip只允許引用原NAMING Completed／Skipped與可核對碰撞證據，不建立假Operation。Create後才發生的碰撞不能改mode或原fingerprint。TargetReference／Receipt是結果，不納入input；TargetKey是受控邏輯key，不接受任意Storage實體路徑。所有schema排除runtime time／RunNo／Attempt／TraceId。FILE_RENAME規則版本與target policy的原持久解析依據不足時阻擋，不假設Naming版本字串可直接替代。
+
+## Reservation、Operation 與 CollisionEvidence
+
+NAMING T3在同一短SQL交易中取得Item Reservation並提交選定TargetName；未取得不能提交Success目標。Reservation以ItemId定位，OperationId初始NULL；僅FILE_RENAME Create分支的T2核對NAMING Completed／Success與固定TargetName後，建立唯一Prepared Operation並將Reservation一次性綁定，與InputFingerprint／owner／實際Running同提交。前段Skip不要求Reservation或Operation。避免Reservation必須先有Operation、Operation又必須先有完成TargetName的循環。ItemId／Operation.ItemId／Reservation.ItemId須同交易核對，不以FK宣稱完整一致性。
+Operation immutable request payload包含OperationId、Item、Image、ExpectedContentVersion、已提交TargetName、ProviderId／NamespaceId／TargetPolicyVersion／TargetKey及fingerprint。Provider與namespace是受控識別，不是秘密或實體路徑。TargetReference／Receipt是後續Create／Inspect核對的結果，Prepared為NULL，不是假成功證據；可依核准T3寫入，不代表可改request payload。
+CollisionEvidence是schemaVersion=1的具名JSON：itemId(正Int64)、operationId(nullable GUID；建立前NULL、後發必填)、source(受控SqlReservation或StorageCollision)、candidates(按嘗試順序的非空陣列)。每候選含candidateOrdinal(Integer0..99)、targetName(String)、targetKey(String)、evidenceReference(受控String，至多500字元)。不得自由增欄、存原始Exception、秘密或任意Path；它不是API ErrorCode。SqlReservation引用衝突Reservation的Item身分，須可核對不同Item與相同key；StorageCollision引用核准Adapter持久證據，須證明本Operation未建立Artifact且無未結束Create。字串存在或任意bool不等於通過驗證；協調層核對原輸入、policy、候選順序、關聯與來源，原證據不可被清理掉再假裝仍有效。
+CollisionEvidence只在碰撞決策使用；一般非碰撞失敗不得虛構此證據。StorageCollision reference的具體格式、可靠來源及Adapter映射尚未交付，該路徑保留Implementation Blocker；不宣稱目前Storage Interface已能證明無副作用。
+
+## 碰撞與兩個Step的結果
+
+| 時點／條件 | NAMING | FILE_RENAME／操作 |
+|---|---|---|
+| Operation前選到可預留候選 | T3 Success＋TargetName／Reservation | 後續T2才Prepared |
+| Operation前依Skip政策確認碰撞 | T3 Skipped＋Item證據，無TargetName | 後續真實Skip決策invocation核對原證據，以Skipped完成，不呼叫Create、不建假Operation |
+| NumericSuffix／Sequence仍有候選 | 不提前完成；按穩定順序選擇 | 不提前Create |
+| 100候選耗盡或Fail政策拒絕 | FILENAME_COLLISION Permanent Failed | 不開始後續Step |
+| Operation後確認外部碰撞且Policy=Skip | 保留原Success／History | T3 Skipped；Operation／Item ArtifactDisposition為Skipped，保留Reservation |
+| Operation後確認外部碰撞且其他Policy | 保留原Success／History | FILENAME_COLLISION Permanent Failed；Operation／ArtifactDisposition為Failed |
+| 本Operation同payload的Artifact已存在且核對成功 | 不變 | 先查提交證據，再補T3或重用；不是另一份Artifact |
+| Create／Inspect結果未知 | 不變 | NeedsReconciliation，不轉為碰撞／Failed／Skipped |
+
+最多100個穩定候選（原名＋99）限於Operation建立前，配置須由原核准規則固定，不解除上限、不換CollisionPolicy列舉。建立後不試下一候選、不換OperationId／TargetName／payload；這是本次人工批准的MVP限制。確定後發碰撞必須同時有核准無本Operation Artifact證據、無仍可能完成的Create及不同目標owner證據；任意Provider Exception、目標存在或Inspect Missing不足。
+前文雙Step Skipped只適用NAMING完成前的核准Skip；後發Skip不倒寫NAMING Completed／Success。History只記真實執行觀察，不偽造成功Invocation，也不因跳過Storage便捏造Storage呼叫。Skip不是ArtifactCreated，尚未知的結果不填ArtifactDisposition終態。
+
+## T2／T3、Ownership 與恢復
+
+NAMING結果reference為受控naming_request_items/{ItemId}/{NamingRuleVersion}；FILE_RENAME Create結果為naming_operations/{OperationId}/{FileRenameRuleVersion}。前段Skip的FILE_RENAME以原Item的Skip reference及本checkpoint identity核對，不杜撰Operation。reference至多500字元，不是Storage Path，也不單憑row存在判完成。
+Item owner只屬NAMING；Operation owner只屬FILE_RENAME。Create T2原子保存輸入、owner、fingerprint與Running；Artifact成功的T3須先經Inspect核對OperationId／immutable payload／ExpectedContentVersion／成功Receipt／TargetReference／原owner＋rowversion及合法Checkpoint／History證據，必要Primary投影同提交。前段Skip核對原Item的NAMING Completed／Skipped證據與本次合法Invocation／Checkpoint／History，依核准StepOutcome契約提交Skipped，不要求Operation／Reservation／Receipt、不呼叫Create、不偽造外部成功或Invocation。FILE_RENAME不改Naming owner；Secondary Job不改Primary投影。Completed結果不覆寫，結果重用不接管原producer。
+確定後發碰撞的T3保持原OperationId／TargetName／payload，核對可信CollisionEvidence、無本Operation Artifact、無仍可能完成的舊Create及原owner＋rowversion；Receipt／TargetReference必須NULL，依核准Policy保存Skipped或Permanent Failed與合法Checkpoint／History，NAMING原Success不變。證據不足保持NeedsReconciliation，不更換Operation或下一目標；Storage Adapter證據不足仍阻擋。NAMING已因候選耗盡或Fail政策Permanent Failed時，不啟動FILE_RENAME、不建Operation或FILE_RENAME T3／成功History。
+NAMING計算後T3未提交可沿原輸入核對／安全重算；僅FILE_RENAME Create分支在T2確認提交後才呼叫Storage Create。Create unknown先Inspect；T3 commit unknown先查原持久Invocation／結果／History／Owner，不盲目重送Create或aggregate。Inspect Complete須核對Operation／內容／目標／Receipt，再補T3或重用；Missing還須確認舊Create已停止才可同Operation同payload重試；Unknown保持阻擋。Cancellation／Timeout／失聯不證明停止。
+Resume沿原Run、Item、輸入與Operation；合資格ManualRetry新Run仍沿原Request／版本，不建立第二份Artifact。未開始NAMING只從原靜態集合及核准結果鏈首次具體化，缺來源不backfill、不選最新。SQL交易不跨完整Storage I/O，不自動清理Artifact／Reservation、不移動或覆寫原圖；原T5資格、上限與T1～T5邊界不變。
+
+## Remaining Implementation Blockers
+
+Provider／Namespace／TargetPolicyVersion具體Manifest；conditional no-overwrite／Inspect／Receipt真實驗收；後發碰撞可信無副作用證據與CollisionEvidence Adapter映射；Unknown reconciliation／舊執行者停止；Failed Operation合法跨Run恢復；Request建立的Application接點；Frozen RuleVersion跨Step完整性仍待交付。不得新增ErrorCode、API或修復機制補洞。F-04-01整體、N-01／N-02未解除，不開始B-1c，不宣稱TASK-04 COMPLETE。

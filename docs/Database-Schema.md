@@ -420,6 +420,46 @@ Binding 不授予結果寫入權；owner 是原生產者，不是所有消費者
 已有 binding 的 Resume／ManualRetry 沿同 Job 原輸入。原 Run 尚未開始 QUALITY 且無 binding 時，不虛構 MetadataResultId、不選最新 QualityRuleVersion；若原 Workflow 缺可重建的持久版本依據，該路徑為 Implementation Blocker。本節不新增版本選擇表、預設或政策。
 N-01 profile、N-02、F-04-01 其他輸入缺口、Reader 同 bytes、Missing／Mismatch 診斷及未關閉 invocation 處置仍未完成。未來實作須另獲授權並以新增式 Migration／真實 SQL 測試驗證，本輪不建立或執行 Migration。
 
+## B-1b-03 核准補充：Naming／Artifact 四表生命週期
+
+本節優先於§9舊Naming表同題的必填時機／Reservation關聯／操作狀態描述；僅Specification，不代表EF或SQL已交付。保留四表，不新增第五表，不改MOD-01或既有Migration。業務與具名Canonical／CollisionEvidence以MOD-04 B-1b-03為準；所有FK採NoAction。
+
+### naming_requests／naming_request_items
+
+Request保留Id GUID PK、BatchId FK、Template NVARCHAR(1000)、RuleVersion VARCHAR(50)、CollisionPolicy VARCHAR(30)、InputFingerprint CHAR(64)、CreatedAt；新增SequenceStart BIGINT NOT NULL CHECK>=0。Request與完整Items首次T1前同一準備交易保存，靜態集合不可增刪改序；fingerprint可由原成員完整重建。
+Item保留Id BIGINT PK、RequestId／ImageId／JobId FK、UNIQUE(JobId)、UNIQUE(RequestId,ImageId)、UNIQUE(RequestId,Ordinal)、Ordinal INT>=0、Sequence BIGINT>=0、OriginalExtension NVARCHAR(20)；新增OriginalFileName NVARCHAR(255) NOT NULL（不含副檔名）。靜態欄位非NULL且不可變，Ordinal連續及Sequence=checked(Start+Ordinal)、Job／Image／Batch一致性由準備交易核對，不聲稱FK可保證。
+
+| Item新增／調整欄位 | 型別／Nullability／限制 |
+|---|---|
+| ResolvedInput | NVARCHAR(MAX) NULL；具名schemaVersion1，非NULL須ISJSON |
+| TargetName | NVARCHAR(255) NULL；僅正式命名成功結果才填入 |
+| NamingStatus | VARCHAR(20) NOT NULL；Pending／Processing／Completed／Failed |
+| NamingOutcome | VARCHAR(20) NULL；Success／Skipped |
+| InputFingerprint | CHAR(64) NULL；NAMING T2凍結 |
+| ProcessingOwnerCheckpointId | BIGINT NULL FK→processing_step_checkpoints.Id；NAMING owner |
+| rowversion | rowversion，SQL併發核對 |
+| CompletedAt | DATETIMEOFFSET(7) NULL；NAMING終態時間 |
+| ErrorCode | VARCHAR(100) NULL；既有核准錯誤碼 |
+| CollisionEvidence | NVARCHAR(MAX) NULL；非NULL須ISJSON，MOD-04具名schemaVersion1 |
+| ArtifactDisposition | VARCHAR(20) NULL；Created／Skipped／Failed，獨立於NamingOutcome |
+
+CHECK：Pending的ResolvedInput／InputFingerprint／TargetName／Outcome／CompletedAt／ErrorCode／owner為NULL。Processing須ResolvedInput／fingerprint／owner非NULL，TargetName／Outcome／CompletedAt／ErrorCode為NULL。Completed／Success須來源、fingerprint、owner、TargetName、CompletedAt非NULL；Completed／Skipped須來源、fingerprint、owner、CompletedAt、CollisionEvidence非NULL且TargetName NULL。Completed的ErrorCode NULL。Failed須來源、fingerprint、owner、CompletedAt、ErrorCode非NULL，Outcome／TargetName NULL；非碰撞失敗不強制CollisionEvidence。未知列舉及不完整組合拒絕，NULL分支須明確，不能靠SQL UNKNOWN放行。
+ArtifactDisposition Created只能對應Naming Completed／Success；Skipped只能對應Naming Completed／Success或Skipped；Failed只能對應Naming Completed／Success，表示後續Artifact失敗，不代替Naming Failed。NULL不代表成功。實際Operation／Receipt及Skip證據由交易核對；跨表一致性不是CHECK可單獨完成。Item狀態不照抄Checkpoint Recovery狀態，不清除凍結輸入。Completed命名業務內容／owner不可改，後續只更新獨立ArtifactDisposition並核對rowversion。
+
+### naming_operations
+
+保留OperationId GUID PK、ItemId BIGINT NOT NULL FK UNIQUE、ExpectedContentVersion CHAR(64) NOT NULL、rowversion、CreatedAt／CompletedAt。TargetReference VARCHAR(500)改為NULLable，Receipt NVARCHAR(MAX)保持NULLable且非NULL須ISJSON。Status VARCHAR(30) NOT NULL保留Prepared／ArtifactCreated／Committed／NeedsReconciliation，新增受控Skipped／Failed。
+新增ProviderId VARCHAR(50)、NamespaceId VARCHAR(100)、TargetPolicyVersion VARCHAR(50)、InputFingerprint CHAR(64)、ProcessingOwnerCheckpointId BIGINT FK→processing_step_checkpoints.Id，均NOT NULL；owner屬FILE_RENAME。新增ErrorCode VARCHAR(100) NULL、CollisionEvidence NVARCHAR(MAX) NULL（非NULL須ISJSON、具名schema）。Provider／Namespace為受控邏輯識別，不是秘密或實體Path；TargetName沿不可變Item讀取，不重複新增欄位。
+CHECK：Prepared的TargetReference／Receipt／CompletedAt／ErrorCode NULL；ArtifactCreated須核對後的TargetReference／Receipt非NULL、CompletedAt／ErrorCode NULL；Committed須TargetReference／Receipt／CompletedAt非NULL、ErrorCode NULL。Skipped須CompletedAt／CollisionEvidence非NULL、TargetReference／Receipt／ErrorCode NULL；碰撞Failed須CompletedAt／ErrorCode／CollisionEvidence非NULL、TargetReference／Receipt NULL。非碰撞Failed亦須CompletedAt／ErrorCode且不得以unknown冒充已確認失敗，其具體安全處置仍受既有阻擋限制。NeedsReconciliation無終態CompletedAt，不以缺Receipt推論無Artifact；已有核對證據不得任意抹除。Failed／Skipped／Committed均不可自行重開。
+immutable request payload是OperationId／ItemId／ExpectedContentVersion、原Item目標與來源、Provider／Namespace／TargetPolicy／TargetKey／fingerprint；結果欄位不在payload內，僅由核准T3／恢復核對更新。FK／UNIQUE不保證owner授權或不可變，須owner＋rowversion及原Invocation核對。Failed跨Run重取權未核准，不因T5存在就允許覆寫。
+
+### naming_artifact_reservations
+
+新增ItemId BIGINT NOT NULL PK／FK→naming_request_items.Id；OperationId GUID改為NULLable FK→naming_operations.OperationId，UNIQUE採WHERE OperationId IS NOT NULL的filtered index。TargetKey NVARCHAR(500) NOT NULL保持UNIQUE NONCLUSTERED，使用明確binary比較的provider-normalized logical scope key，含provider／namespace識別且不能默默截斷或套預設collation。
+NAMING T3建立Item Reservation與TargetName／結果同提交；FILE_RENAME T2才將OperationId由NULL一次性綁定。ItemId／Operation.ItemId／Reservation.ItemId同交易核對；不循環要求先有Operation才能保存命名目標。TargetKey建立後不可改，OperationId綁定後不可換；不刪除／重建reservation繞過碰撞。Provider target policy的原Manifest必須可重建，未交付時阻擋，不能依目前配置解讀舊key。
+
+所有hash非NULL時須精確64字元小寫0-9/a-f，拒絕padding／非法長度／大小寫寬鬆比對；必要版本、reference與名稱拒絕空白及超長。JSON格式CHECK不是Evidence已核准或來源一致性的證明。T2／T3與Owner、History、Primary投影依MOD-02／MOD-04補充，SQL不跨Storage I/O；ResultReference分Item與Operation，不以row存在冒充Completed。N-01／N-02／F-04-01及Storage證據／Recovery等Remaining Blockers保留，未授權Migration。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。
