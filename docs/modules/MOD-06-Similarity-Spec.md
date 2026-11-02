@@ -2018,3 +2018,45 @@ golden與matrix須100%bit一致、並發/重啟一致。independent holdout按�
 ### N-01引擎決策的完整資料要求
 
 Architecture決策需一次確認Decoder EngineId/精確PackageVersion、ICC engine/version、native version/OS變體（若有）、package來源/鎖定及支援matrix（至少Linux x64與Windows x64、.NET10相同精確runtime patch，版本寫入manifest）。跨平台bit一致是待驗收要求，不能把只跑Linux說成跨平台PASS。推薦優先單一跨平台managed decoder/ICC provider以減少不同native實作，但ImageSharp與OpenCvSharp都只候選；本輪無已核准package/版本，不虛構pin。若無法達門檻須回報重新決策，不更換引擎/降threshold/改rounding默默通過。
+
+## B-1c-02 核准補充：VISUAL 最小持久輸入與准入邊界
+
+本章只定稿 TASK-04 所需的 Frozen Input 必要條件與 Context／Adapter 責任，補足前文同題邊界，不批准完整 Candidate Scope、pHash 生產策略、N-02 或 Current Pointer 政策。前次候選表、Job Binding、Nullable Header、發布序號及 Canonical 草案仍是提案，不因本章而成為可實作 DDL／Public Signature。
+
+### 三個階段不得混用
+
+| 階段 | 必須保留的證據 | 不得替代為 |
+|---|---|---|
+| 等待前目標範圍 | 持久、版本化且可重建的資格來源及完整 ImageId／ContentVersion 集合 | 沒有內容版本的全部 images、僅 Completed pHash 或記憶體清單 |
+| 就緒後分析輸入 | 原目標集合逐一對應的 Completed pHash ResultId、Profile 與完整來源鏈 | 缺成員的部分集合或只存 CandidateFingerprint |
+| 分析後結果 | 完整 Membership／Edges／Group 與合法提交證據 | 反過來以目前 visual_memberships／visual_edges 證明歷史輸入 |
+
+尚無核准完整資格來源時 Fail-Closed，不建立部分正式 Snapshot，也不把無 pHash 生產路徑的成員放入無限等待。成員資格、首次凍結切點、內容版本來源、空集合適用情境仍待核准；不得沿用 EXACT 的 Completed-only 政策。新增圖片不得改變已凍結集合。
+
+### 不可變來源與具名驗證形狀
+
+以下是執行前必須可核對的邏輯資料，不新增具體 Provider Signature 或 SQL 欄位。SnapshotId、成員 ImageId／ContentVersion、ProfileVersion、規則版本及具名候選來源一經合法凍結不得重選；PerceptualHashResultId 在就緒時固定後亦不可替換。
+
+| 具名資料 | 已定稿的驗證責任 |
+|---|---|
+| Job／Image／WorkflowVersion | 對應原 Job、B-1a 來源與原 Rule Manifest，不讀目前設定重選 |
+| SnapshotId／具名資格來源 | 能定位完整且版本化的原目標成員；不得僅有摘要 |
+| 成員 ImageId／ContentVersion | 與每筆被引用結果精確一致，依 ImageId ASC 固定順序，不以查詢自然順序代替 |
+| PerceptualHashResultId | 每位必要成員都有已提交 Completed 結果，來源及版本一致 |
+| ProfileVersion／ProfileManifestChecksum | 核對 pHash 所用不可變 Profile 與其原發布內容；N-01 未批准不得填假值 |
+| Root Rule ManifestChecksum | 核對 Job 規則根 Manifest；不是 pHash ProfileManifestChecksum，不能互相代填或直接要求兩者相等 |
+| VISUAL RuleVersion／Grouping Rule／Threshold／容量限制 | 沿原核准規則解析，保持 single-link、0.85 及既有1000 Candidates／50000 Edges契約，不以新版配置解釋原輸入 |
+| CandidateFingerprint | 必須可由完整固定來源重建；與結果引用、Owner／提交證據分別核對，不反推成員 |
+
+Canonical v1 的固定格式、Ordinal 欄位排序、schemaVersion 自動輸出及 Runtime Identity 排除原則不變。此章不定稿完整 VISUAL Canonical 欄位清單或 fingerprint envelope；Scope／Selection Version、Job-scoped 與跨 Job 重用身分、等待前欄位 Nullability、Root／Profile checksum 的具體欄位映射仍待相關決策。固定成員排序不代表已批准任意 JSON／Dictionary 或新的 Serializer API。
+
+### T2／T3 與未決調度
+
+Context 准入須證明完整資格與所有必要 pHash 就緒，核對 ImageId／ContentVersion／ProfileVersion／ProfileManifestChecksum、原規則及來源鏈。缺少任一必要來源時 Adapter 不得執行，不能因部分未就緒而縮減集合。合法 T2 同交易固定 ResultId、fingerprint 與 Invocation 身分，確認 Commit 才執行；不把等待記成 Running。
+只有完整 Membership／Edges、來源版本、Owner／rowversion 與必要 Checkpoint／History 提交證據合法時，才能依原 T3 發布 Completed Snapshot。不發布部分結果，不覆寫 Completed。Current Pointer 是否切換及跨 Profile 相容性仍待決，不能把結果完成當作無條件切換授權。Commit Unknown／Resume／ManualRetry 須核對原持久來源，不重新選最新集合；未知原執行狀態仍遵守既有安全恢復，不以 Cancellation 判定停止。
+T2-W 目前只批准 VERSION_ANALYSIS，VISUAL Waiting 未取得實作授權。可考慮沿用短交易、持久 Deadline、釋放 Worker、無 Running 且不消耗 Retry 的原則，但不是已批准擴充。VISUAL Timeout／允許範圍、到期及永久失敗診斷適用範圍、Scanner／等待恢復責任仍未定；不得直接套 VERSION 的120秒、既有診斷碼或修改現有 SQL CHECK。
+
+### 責任與 Remaining Blockers
+
+TASK-04 負責 Frozen Input 必要條件、Context／Adapter 邊界、驗證與 Fail-Closed，以及已核准結果的來源核對，不提前提供完整 MOD-06 Runtime。MOD-06／後續整合負責實際資格來源、pHash 生產策略、正式 N-02、Snapshot Reader／Writer、Current Pointer 發布競爭、Engine／Profile、Migration 與 SQL 整合驗證。
+候選資格與內容版本來源、空集合語意、跨 Job 重用、N-02、Current 發布順序／跨 Profile 政策及具體持久形狀仍未批准；N-01 與 F-04-01 剩餘依賴保留。不得用假資料通過 Analysis，也不得因外部相依缺失擴大 TASK-04 去實作 MOD-06。本章不改 Workflow、VERSION T2-W、StepOutcome R3、EXACT／QUALITY／NAMING、API、ErrorCode 或 JobStatus；BOUNDARY DOCUMENTATION COMPLETE 不代表 VISUAL Runtime READY 或完整 Analysis／Full 可執行。

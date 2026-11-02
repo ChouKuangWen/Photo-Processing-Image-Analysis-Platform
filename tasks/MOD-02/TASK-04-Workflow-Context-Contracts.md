@@ -245,6 +245,16 @@ Workflow/context/adapter contracts 與純測試一組；feat(mod-02): define wor
 - 可核對重用 Completed HashResult，但不直接跨 Job 重用 Job-scoped EXACT 完成結果。後續驗收須包含空 Snapshot 與獨立 NoMatch、匹配資格及未完成排除、版本歧義、晚到、T2 回滾、Group 競爭、Commit Unknown、原輸入重建。
 - 三表／Provider／Writer／版本發布解析、實際索引／鎖競爭／交易時間／高併發與 Crash 驗證仍未交付；N-01／N-02、F-04-01 其他來源與 Recovery 保留。未改 MOD-01／API／ErrorCode／既有唯一鍵／StepOutcome R3，不宣稱 TASK-04 完成，不開始 VISUAL／VERSION／pHash 或其他實作。
 
+## B-1c-02 核准補充：VISUAL 最小契約邊界
+
+本節只記錄人工批准的邊界文件範圍；正式來源為 MOD-06／MOD-02 B-1c-02，不以 TASK 批准未決 Schema、Candidate Scope 或 N-02。
+- TASK-04 交付 Frozen Input 必要條件、Context／Adapter 准入、輸入驗證／Fail-Closed 與核准結果來源核對。等待前目標集合、就緒後 Completed pHash、分析後 Membership／Edges／Group 不得混用；沒有持久版本化資格來源即阻擋，不用部分集合或假資料通過 Analysis。
+- Snapshot／成員內容／Profile／規則／具名來源須固定；就緒後 ResultId、fingerprint 與完整來源鏈可重建，成員依 ImageId ASC。Root Rule ManifestChecksum 不等於 pHash ProfileManifestChecksum，須分別驗證。Canonical v1 規則不變，完整逐 Step 欄位／Nullability／跨 Job 身分仍待決，不新增 Provider Signature。
+- T2 只有完整候選且全部必要 pHash Completed 才能原子固定引用／fingerprint／Running；缺一不可執行。T3 只提交完整、來源及提交證據合法的 Snapshot，不發布部分 Members／Edges；Current Pointer 切換尚需獨立核准政策。
+- MOD-06／後續整合負責資格來源與 pHash 生產、N-02 調度、Snapshot Reader／Writer、Current Pointer 競爭、Engine／Profile、Migration 與整合驗證。這些相依未交付不授權 TASK-04 提前實作 MOD-06。
+- T2-W 仍只批准 VERSION_ANALYSIS；VISUAL Timeout／允許範圍、到期／永久失敗診斷、Scanner／等待恢復及無 pHash 生產路徑處置未定。短交易、Deadline、釋放 Worker、無 Running／不耗 Retry 只保留方案方向，不套120秒、不改 SQL CHECK、不新增 ErrorCode／JobStatus。
+- N-01、N-02、F-04-01、候選內容來源／空集合／跨 Job 重用及 Current 發布順序／跨 Profile 政策仍阻擋。保留 Workflow、0.85、single-link、1000 Candidates／50000 Edges、StepOutcome R3 與 EXACT／QUALITY／NAMING。BOUNDARY DOCUMENTATION COMPLETE 不代表 TASK-04 COMPLETE、N-02 已解決或 VISUAL／Analysis／Full Runtime READY。
+
 ## 15. Out of Scope
 
 實作 EXIF／SHA256 duplicate／pHash／Naming 演算法、任意通用 Context 欄位、修改 Upload input、決定 N-01/N-02。

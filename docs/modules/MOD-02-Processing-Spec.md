@@ -1915,6 +1915,17 @@ N-01 Decoder／ICC／Engine 精確版本未批准，N-02 VISUAL DependencyWait �
 - 同原輸入的已提交 EXACT 結果仍須完整 Owner Checkpoint／History／fingerprint 核對，不能憑 row 存在；不覆寫 Completed。不直接跨 Job 重用 Job-scoped EXACT 完成結果；可核對重用版本相容 Completed HashResult 及共用既有 Group，不製造成功 Invocation。
 - ScopeVersion／CandidateSelectionVersion 的不可變核准發布與 Manifest 解析、實際三表／SQL、完整查詢索引與鎖競爭／交易時間／併發 Crash 測試、診斷及 Recovery 接點仍待交付。F-04-01 整體、N-01／N-02、VISUAL／VERSION 等來源限制未解除，不宣稱 TASK-04 COMPLETE，不開始其他實作。
 
+## B-1c-02 核准補充：VISUAL Context／Adapter 最小邊界
+
+本節依 MOD-06 B-1c-02 補足 TASK-04 的來源驗證責任，不批准完整候選資格、Schema 或 N-02；既有 T1～T5／VERSION T2-W 與 StepOutcome R3 不變。
+- 明確區分等待前完整目標成員、就緒後 Completed pHash 引用、分析後 Membership／Edges／Group。資格須持久、版本化且可重建；不能用缺 ContentVersion 的全部 images、Completed-only pHash、記憶體清單或目前 Membership 替代。
+- 原 SnapshotId、ImageId／ContentVersion、ProfileVersion、規則與具名來源不可重選；就緒後 ResultId 與 CandidateFingerprint 固定，完整來源鏈必須可重建，成員依 ImageId ASC。Job 根 Rule ManifestChecksum 與 pHash ProfileManifestChecksum 分別驗證，不能混用。
+- Context 准入負責完整資格、全部 Completed pHash 與來源／版本核對。沒有核准資格來源或缺任一必要來源即 Fail-Closed，Adapter 不得執行，不縮減集合或以最新設定補值。N-01 未批准不填假 Engine／Profile。
+- 合法 T2 同交易固定 ResultId／fingerprint／Invocation，確認 Commit 才執行。T3 僅在完整 Membership／Edges、來源、Owner／rowversion、Checkpoint／History 證據合法時完成 Snapshot；不發布部分或覆寫 Completed，不將完成視為無條件 Current Pointer 切換授權。
+- VISUAL Waiting 尚未授權；短交易／持久 Deadline／釋放 Worker／無 Running 不消耗 Retry 僅是 T2-W 擴充方向，不直接沿用 VERSION 的120秒或診斷適用範圍，不改 SQL CHECK。Timeout／範圍、到期／永久失敗處置、Scanner／恢復、無合法 pHash 生產路徑成員的處理仍待決。
+- Commit Unknown 先核對原提交證據；恢復及合法 ManualRetry 不重選已凍結來源，不因失聯／Cancellation 自行關閉 Running。具體持久形狀、完整 Canonical、跨 Job 重用及 Current 發布順序／跨 Profile 政策仍待批准，不以本節擴大 SQL Writer 或 Provider Signature。
+- TASK-04 只定義必要輸入與核對邊界；MOD-06／後續整合交付資格／生產策略、正式 Waiting、Reader／Writer、Pointer、Engine／Profile、Migration／驗證。不改 EXACT／QUALITY／NAMING 或 Workflow／0.85／single-link／1000／50000 契約；N-01／N-02／F-04-01 未解除，Analysis／Full 不宣稱可執行。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。
