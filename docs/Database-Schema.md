@@ -481,6 +481,51 @@ WorkflowVersion 必須與 Job 所屬 Workflow、Run、processing_original_inputs
 完整 Manifest 及子資源採 System-Level 所定受控不可變發布／歷史保留，不將內容複製成任意 Context JSON。相同 WorkflowVersion 不等於相同規則組合；相同 Result Unique Key 不等於相同完整 InputFingerprint。既有 Canonical 欄位及結果鍵不變，不加入 Result Attempt。
 實際歷史保存／解析／Application／Repository／Registry 接點、N-01／N-02、EXACT／VISUAL／VERSION 集合來源、診斷及 F-04-01 Recovery 仍待交付或決策。後續 Schema 實作須另獲批准並以新增式 Migration 與真實 SQL 測試驗證，本輪不授權遷移。
 
+## B-1c-01 核准補充：EXACT Job-scoped Input 與結果
+
+本節補足§9及 B-1c-00 尚未定義的 EXACT Snapshot／NoMatch 持久形狀；同題以本節及 MOD-05 B-1c-01 為準。僅 Specification，不代表 Entity／Mapping／Migration／SQL 已交付。三表所有 FK 為 NoAction，不改既有 exact_groups UNIQUE(FileSize,SHA256) 或 exact_group_members UNIQUE(GroupId,ImageId)。
+
+### processing_exact_inputs
+
+| 欄位 | 型別／Nullability | 約束 |
+|---|---|---|
+| SnapshotId | UNIQUEIDENTIFIER NOT NULL | PK |
+| JobId | BIGINT NOT NULL | UNIQUE，FK→processing_original_inputs.JobId |
+| HashResultId | BIGINT NOT NULL | FK→image_hash_results.Id，自身來源 |
+| ExactRuleVersion | VARCHAR(50) NOT NULL | 原 Job Manifest 的核准版本 |
+| ScopeVersion | VARCHAR(50) NOT NULL | 不可變核准集合範圍政策 |
+| CandidateSelectionVersion | VARCHAR(50) NOT NULL | 不可變核准匹配候選政策 |
+| CandidateCount | BIGINT NOT NULL | CHECK >=0 |
+| InputFingerprint | CHAR(64) NOT NULL | 精確小寫 SHA256 |
+
+Header 合併 Job→Snapshot Binding，每 Job 至多一份；全部在首次合法 EXACT T2 保存並不可改綁，不另建 Job Binding 表。Job／Image／Hash／B-1a／Manifest／WorkflowVersion 一致性由同交易核對；Header 無 Result Owner、完成狀態、Retry Counter 或 Context JSON。來源欄位由原引用重建，不重複保存原圖或完整 hash JSON。
+
+### processing_exact_input_candidates
+
+SnapshotId UNIQUEIDENTIFIER NOT NULL FK→processing_exact_inputs.SnapshotId；ImageId BIGINT NOT NULL FK→images.Id；HashResultId BIGINT NOT NULL FK→image_hash_results.Id。PK(SnapshotId,ImageId)，UNIQUE(SnapshotId,HashResultId)。
+Detail 與 Header 同 T2 原子保存，之後不可增刪改；引用的 Completed Hash 業務內容與版本亦不可變且須保留。每筆排除本 Image，限同集合、Completed、FileSize＋SHA256 完整相等且版本相容的來源；ImageId 必須等於 HashResult.ImageId。多版本選擇歧義 Fail-Closed。Header.CandidateCount 等於完整 Detail 數，不靠 FK／CHECK 宣稱跨表資格、計數或不可變性已保證。
+
+### exact_check_results
+
+| 欄位 | 型別／Nullability | 約束 |
+|---|---|---|
+| Id | BIGINT identity NOT NULL | PK |
+| SnapshotId | UNIQUEIDENTIFIER NOT NULL | UNIQUE，FK→processing_exact_inputs.SnapshotId |
+| Status | VARCHAR(20) NOT NULL | CHECK 僅 Completed |
+| Outcome | VARCHAR(20) NOT NULL | CHECK Match／NoMatch |
+| GroupId | UNIQUEIDENTIFIER NULL | FK→exact_groups.Id |
+| MatchedCount | BIGINT NOT NULL | CHECK >=0 |
+| ProcessingOwnerCheckpointId | BIGINT NOT NULL | FK→processing_step_checkpoints.Id，原 EXACT 生產者 |
+| ErrorCode | VARCHAR(100) NULL | CHECK IS NULL |
+| CreatedAt | DATETIMEOFFSET(7) NOT NULL | 結果列建立時間 |
+| CompletedAt | DATETIMEOFFSET(7) NOT NULL | 合法 T3 完成時間 |
+| rowversion | rowversion | SQL 併發核對，不作業務版本 |
+
+本表只在成功 T3 插入 Completed 結果，這是§9共通結果生命週期的具名縮限，不新增 Domain 狀態。CHECK 明確要求 (Outcome=Match AND GroupId IS NOT NULL AND MatchedCount>0) 或 (Outcome=NoMatch AND GroupId IS NULL AND MatchedCount=0)，不得靠 SQL UNKNOWN 放行；不建立 Pending／Processing 或 Failed Result Attempt。失敗保留於原 Invocation／Checkpoint 契約，不用假 NoMatch 存錯誤。
+T3 核對 MatchedCount=Header.CandidateCount、完整輸入與 Owner；Match 的 Group.FileSize／SHA256、Membership HashResult 與凍結來源一致。NoMatch 必須對應已凍結空集合，無 Group；CHECK 只能保護本列形狀，完整性與提交證據需同交易核對。Result／必要 Group、Membership／Checkpoint／History／投影同 Commit，Completed 及 Owner 不覆寫。ResultReference 依 MOD-05 B-1c-01，不額外保存通用 JSON。
+必要版本拒絕空白／超長，hash 精確64小寫 ASCII hex且採明確 binary 驗證；不截斷、不填 latest/default。Canonical 由 MOD-05 具名主／子 Schema 重建，Detail 依 ImageId ASC，不以目前 Group 成員重算。
+首次 T2 採短 Serializable transaction 對完整 Match Predicate 查詢及鍵範圍保護，空集合也保存 Header；不分頁截斷、不跨 Storage I/O。晚到來源不改舊 Snapshot。實際索引、鎖競爭、交易時間與高併發驗證仍阻擋對應實作，不能僅靠 isolation 名稱宣稱完整性已驗收。Resume／ManualRetry／Commit Unknown 依 MOD-02 同名補充；不直接跨 Job 重用 EXACT 完成結果，不變更 N-01／N-02 或其他來源限制。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。

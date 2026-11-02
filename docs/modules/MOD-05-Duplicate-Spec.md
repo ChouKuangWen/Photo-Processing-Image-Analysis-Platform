@@ -1660,3 +1660,54 @@ Review
 本Workflow圖片完整SHA256，無候選也計算，取代舊無同size才不hash的優化。64字元小寫hex/ordinal，版本化hash唯一(ImageId,ContentVersion,HashRuleVersion)，ContentVersion由原始內容核對；獨立Pending/Processing/Completed/Failed，Images.SHA256只是Primary相容投影，不改mapping。HashRuleVersion/NoMatch/candidate版本結果authority，不以null/group不存在當已完成。
 group/member唯一與DBtransaction處理並行race；member UNIQUE(GroupId,ImageId)，單content可重用versionhash，候選晚到建立新membership snapshot，不覆寫舊CompletedJob/History。SHA256與FileSize只判EXACT，不冒充pHash/VISUAL，也不自動刪圖。
 Application只協調，Infrastructure透過獨立reader，NoMatch有明確已分析證據。缺檔/損壞/不支持永久錯誤，不Retry；transient由MOD02四槽位，不內部重試。T3保存result/group/reference/checkpoint/History同commit，commit不明先核DB。
+
+## B-1c-01 核准補充：EXACT 持久匹配輸入與完成證據
+
+本章依人工批准補足 F-03 的候選資格、歷史 Snapshot 與 Match／NoMatch 證據，優先於先前同題未決描述及「保存所有同大小候選」提案。只凍結 FileSize＋SHA256 完整相等的合資格匹配來源；不改 SHA256 演算法、Workflow、既有 Group／Member 唯一鍵或 API。這是 Specification，不代表 EF、SQL、Provider 或測試已交付。
+
+### 候選資格與切點
+
+首次合法 EXACT T2 前，本 Job 的 SHA256 Step 必須 Completed，沿其合法結果引用取得已提交的 image_hash_results，核對原 ImageId、B-1a ContentVersion／ContentLength、HashRuleVersion 及原 Job Manifest；不能只讀 Images.SHA256 投影。自身 SHA256 仍須完整計算，沒有匹配候選也不能省略。
+候選限原部署核准的單一資料集合，允許跨 Batch，排除本 ImageId。只選 Completed HashResult，FileSize 與自身完全相同、SHA256 以精確小寫 hex／ordinal 比較完全相同，HashRuleVersion 符合原 Manifest 的已核准相容性要求。不自行推定不同版本等價；缺相容性依據時阻擋。Pending／Processing／Failed 或沒有 HashResult 的圖片明確不具當次資格，不等待、不補算，也不宣稱已比較它們。
+同一候選 Image 有多個可能有效內容版本而無核准選擇規則時 Fail-Closed，不依 CreatedAt／最大 Id／最新 Image 投影選一筆，也不能藉匹配篩選掩蓋已知來源歧義。Completed Hash 的內容、版本與完整來源證據必須不可變且可回讀，不以目前 exact_group_members 還原歷史輸入。
+首次 T2 使用短 SQL Serializable transaction，對完整 Match Candidate Predicate 一致查詢並以適當索引與鍵範圍保護至提交；原子保存 Header、所有 Detail、InputFingerprint、Checkpoint 與實際 Running Invocation。切點是該交易的序列化觀察位置，不是 CreatedAt 或 MAX(Id)。不得以 LIMIT／分頁截斷冒充完整集合，SQL 不跨 Storage I/O；索引、鎖競爭、交易時間與實際高併發驗證仍是 Implementation Blocker，Serializable 名稱不是驗收證明。
+空集合仍保存 Header、CandidateCount=0 與由空陣列產生的 fingerprint，表示該切點依完整資格查詢沒有已完成匹配來源，不是永久全庫 NoMatch。Header 的存在只證明已凍結輸入；必須再有 T3 完成結果。晚到 Completed Hash 不改舊 Snapshot，只能在後續合法新分析形成新 Snapshot，不自動重開舊 Job。
+
+### EXACT Canonical v1
+
+主 Schema 以下列 Ordinal 順序輸出；全部非 NULL。Integer 為明確整數，識別為正值，長度非負；版本為非空受控字串且不得填 latest／default。ScopeVersion／CandidateSelectionVersion 由原 Manifest 所固定的不可變核准政策解析，不能讀目前部署設定補值。
+
+| 欄位 | 型別 | 持久來源／規則 |
+|---|---|---|
+| candidateFingerprints | String Array | 依 ImageId ASC 的候選子 Schema SHA256；空集合為 [] |
+| candidateSelectionVersion | String | Header 固定的匹配候選資格政策版本 |
+| contentLength | Integer | B-1a 原圖長度，與自身 HashResult.FileSize 一致 |
+| contentVersion | String | B-1a 原內容 SHA256，64 小寫 hex |
+| hashResultId | Integer | Header 固定的自身 Completed HashResult |
+| hashRuleVersion | String | 自身 HashResult，核對原 Manifest |
+| imageId | Integer | 原 Job 的 ImageId |
+| jobId | Integer | Header 的原 JobId |
+| ruleVersion | String | Header.ExactRuleVersion，核對原 Manifest |
+| schemaVersion | Integer | Canonical serializer 自動輸出 1，不建立 CanonicalField |
+| scopeVersion | String | Header 固定的核准單部署集合範圍政策版本 |
+| sha256 | String | 自身 Completed HashResult 的完整 SHA256，64 小寫 hex |
+| snapshotId | String | Header.SnapshotId，GUID 小寫 D 格式 |
+| step | String | 固定 EXACT_DUPLICATE_CHECK |
+| workflowVersion | String | 原 Job Manifest／B-1a 一致的版本 |
+
+候選子 Schema 的 Ordinal 順序為 contentVersion（String）、fileSize（Integer）、hashResultId（Integer）、hashRuleVersion（String）、imageId（Integer）、schemaVersion（Integer，自動 1）、sha256（String）；全部非 NULL。每筆由 Detail 引用的不可變 Completed HashResult 重建，hash 均精確64小寫hex，長度非負、Id 正值。子 fingerprint=SHA256(該子 Schema 的 Canonical UTF-8 bytes)，主陣列依 ImageId ASC 排序，不能依 SQL 未指定順序或 hash 排序。
+主 InputFingerprint=SHA256(主 Schema Canonical UTF-8 bytes)，沿用既有 Canonical v1 的固定 escaping／Ordinal／無 BOM／無排版空白等規則，不修改 Serializer。完整 Detail 與原引用必須保留，不能只存指紋再嘗試反推來源。JobId／SnapshotId 是固定業務輸入，不是 Runtime Attempt；GroupId、Outcome、Owner、RunNo、AttemptNo、ResumeNo、TraceId、執行時間及 Storage Path 不進輸入。ContentVersion 與 InputFingerprint 的 SHA256 對象不同。
+
+### Match／NoMatch 與 Ownership
+
+本政策的 Detail 全部是匹配候選；T3 須再次核對凍結內容、計數與 fingerprint。CandidateCount>0 才提交 Completed／Match，MatchedCount 等於該凍結集合筆數，不是目前 Group 最新成員數。T3 依原 UNIQUE(FileSize,SHA256) 建立或取得 Group，按 UNIQUE(GroupId,ImageId) 原子加入本圖與合法匹配候選；既有 Membership 來源不一致時不得覆寫或默認等價。
+CandidateCount=0 才提交 Completed／NoMatch、GroupId=NULL、MatchedCount=0，不建立假 Group。Match 與 NoMatch 都是合法分析完成，Invocation／Checkpoint 使用 Success，不把 NoMatch 當 Skipped／Failed。Group 不存在、當前 Member 為零或 Nullable GroupId 均不能單獨證明 NoMatch。
+exact_check_results 僅於成功 T3 插入 Completed 列；不要求無用途的 Pending／Processing 列，不建立 Failed Result Attempt。失敗仍依原 History／Checkpoint／Job 契約處理。結果與必要 Group／Membership、ResultReference、Checkpoint、History、必要投影同交易提交。輸入 Header 不含 Result Owner，結果保存原生產者 Checkpoint 與 rowversion，不能以持有 Snapshot 取代執行權。
+ResultReference 為 exact_check_results/{Id}/{ExactRuleVersion}，沿用受控 reference 長度上限500；版本從原 Header 核對。完成證據必須包含原 Snapshot、完整 fingerprint、Owner Checkpoint 與已提交 History／終態。Completed Result 及原匹配集合不可覆寫，晚到成員不改舊 NoMatch 或舊 MatchedCount。
+跨 Job 可核對重用相容 Completed HashResult、共用 EXACT Group，但不直接重用 Job-scoped EXACT 完成結果；新 Job 的 JobId／SnapshotId 是不同 Canonical input。單一 hash row 存在不等於通過來源／版本／原 Owner／提交證據核對，不新增 Result Attempt 或改 Group 唯一鍵。
+
+### 恢復與未交付事項
+
+T2 Commit Unknown 先查原 Snapshot／Detail／Checkpoint／Running，確認提交才執行；T3 Unknown 核對原 Result／Group／Membership／Checkpoint／History，不盲目再 INSERT 或重複投影。Crash 後依原 Snapshot 重建，不重查目前候選；Cancellation／Timeout 不證明舊 Invocation 停止，仍遵守 MOD-02 安全恢復。
+Resume 沿原 Run，合資格 ManualRetry 新 Run 沿同 Job 原 Snapshot／Manifest；已有 Snapshot 不重新選候選。從未開始 EXACT 時，在首次合法 T2 才選取並保存 Snapshot，規則仍來自原 Manifest，不假造過去候選。缺原來源／版本或已存內容不符即 Fail-Closed，不 backfill、不擴大 T5 資格。
+三表與實際來源解析、版本發布、完整性檢查、SQL 鎖／索引／併發／Crash 測試、診斷及 Recovery 接點尚未交付；不因本章定稿解除 F-04-01 整體、N-01／N-02 或其他集合來源缺口，不開始 VISUAL／VERSION／pHash 實作。

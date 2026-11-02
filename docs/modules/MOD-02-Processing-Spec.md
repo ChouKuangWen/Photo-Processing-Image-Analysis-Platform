@@ -1901,6 +1901,20 @@ Manifest 是規則選擇權威；B-1a 是原圖與 WorkflowVersion，EXIF／GEO�
 本章只解決規則選擇契約，不解決 EXACT 候選／NoMatch、VISUAL Snapshot 明細／Job Binding、VERSION Snapshot／Group scope／QualityResult 集合。Manifest 固定格式的實際發布資源、歷史保存／核准解析、Application／Repository／Registry 接點尚未交付；Missing／Mismatch 診斷、Reader、Storage 證據及 F-04-01 Recovery 等限制仍在。
 N-01 Decoder／ICC／Engine 精確版本未批准，N-02 VISUAL DependencyWait 未批准；不改 T2-W／Deadline／StepOrder／SQL CHECK，不宣稱 Analysis／Full 或 TASK-04 READY FOR IMPLEMENTATION。MOD-08 最終 F-06 優先，B-1c-03 仍須明確核對推薦 membership snapshot 的整體／群組範圍；不在本章改排名公式或唯一鍵。
 
+## B-1c-01 核准補充：EXACT T2 快照與 T3 完成證據
+
+本節依 MOD-05 B-1c-01 與 Database-Schema 三表補充定義 EXACT 持久來源，優先補足前文 EXACT 候選／NoMatch 尚未定義的同題缺口。不變更 T1～T5、StepOutcome R3、Workflow、既有 Serializer、Retry 資格、JobStatus 或 ErrorCode；只批准文件，不代表 SQL Writer／Provider 已交付。
+
+- 首次合法 EXACT T2 前，自身 SHA256 Step 已 Completed，核對其已提交 image_hash_results 與原圖／Image／原 Manifest 的版本及完整來源。候選只納入原部署核准集合內跨 Batch、排除本 Image、Completed、FileSize＋SHA256 完整相等且版本相容的 HashResult。未完成 Hash 明確不具當次資格，不等待、不補算；版本選擇歧義 Fail-Closed，不選最新投影或目前 Group。
+- T2 在短 Serializable transaction 核對 Job／Run／Checkpoint、Manifest、自身 Hash；對完整匹配資格查詢並保護鍵範圍，原子保存 processing_exact_inputs、全部 candidates、InputFingerprint／Checkpoint 與實際 Running Invocation。切點為交易的序列化觀察位置，不是 CreatedAt／MAX(Id)；不截斷、不跨外部 I/O，確認 Commit 才執行。
+- Header 是每 Job 不可變 Snapshot，無 Result Owner，也不是完成結果。空集合保存 CandidateCount=0 與空陣列 fingerprint；Canonical 依 MOD-05 主／子具名 Schema，包含固定 JobId／SnapshotId，不含 GroupId／Outcome／Runtime Invocation Identity。
+- T3 核對原 Snapshot／完整來源／fingerprint／Invocation／Owner。非空集合提交 Completed／Match，建立或取得唯一 Group 並原子加入合法 Membership；MatchedCount 是原凍結集合數。空集合提交 Completed／NoMatch、GroupId=NULL、MatchedCount=0，不建假 Group；兩者均為 Success 分析完成，不是 Skipped／Failed。
+- exact_check_results 僅成功 T3 插入 Completed；結果、必要 Group／Membership、ResultReference、Checkpoint、History、必要投影同交易提交。兩 Job 爭同 Group 時沿既有 Unique 與交易核對處理，不能局部 Commit；既有 Membership 來源矛盾不得覆寫。失敗仍走既有 History／Checkpoint／Job 契約，不新增 Failed Result Attempt。
+- T2 Unknown 先查原 Header／Detail／Checkpoint／Running；未確認不得執行。T2 後 Crash、Adapter 中斷或 T3 前失敗均沿原 Snapshot；T3 Unknown 先核對 Result／Group／Membership／Checkpoint／History，不盲目重送或重複投影。Cancellation／Timeout 不證明舊執行停止，不自行關閉 Running。
+- Resume 沿原 Run；合資格 ManualRetry 新 Run 沿同 Job 原 Snapshot／Manifest，不重選候選。從未開始 EXACT 時僅於首次合法 T2 建 Snapshot，規則取原 Manifest，不假造過去集合。缺來源／不符 Fail-Closed，不 backfill。晚到 Hash 只影響後續合法新 Snapshot，不改舊完成 History。
+- 同原輸入的已提交 EXACT 結果仍須完整 Owner Checkpoint／History／fingerprint 核對，不能憑 row 存在；不覆寫 Completed。不直接跨 Job 重用 Job-scoped EXACT 完成結果；可核對重用版本相容 Completed HashResult 及共用既有 Group，不製造成功 Invocation。
+- ScopeVersion／CandidateSelectionVersion 的不可變核准發布與 Manifest 解析、實際三表／SQL、完整查詢索引與鎖競爭／交易時間／併發 Crash 測試、診斷及 Recovery 接點仍待交付。F-04-01 整體、N-01／N-02、VISUAL／VERSION 等來源限制未解除，不宣稱 TASK-04 COMPLETE，不開始其他實作。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。

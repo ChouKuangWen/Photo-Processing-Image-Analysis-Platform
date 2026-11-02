@@ -232,6 +232,19 @@ Workflow/context/adapter contracts 與純測試一組；feat(mod-02): define wor
 - N-01、N-02、EXACT 候選及 NoMatch、VISUAL 明細及 Job Binding、VERSION 範圍及 QualityResult 集合、Manifest Application／Repository／Registry、F-04-01 其他來源／Recovery 仍是未決或未交付依賴。MOD-08 最終 F-06 優先，推薦 membership snapshot 整體／群組範圍留 B-1c-03 決策，不改公式。
 - 文件定稿不等於 TASK-04 COMPLETE 或 Analysis／Full READY FOR IMPLEMENTATION；後續實作須獨立 Review 與批准。本輪不建立 Entity、Mapping、Migration、Provider、Registry 或 Tests，不開始 B-1c-01～03／B-2。
 
+## B-1c-01 核准補充：EXACT Persistent Input 文件契約
+
+本節記錄人工批准的匹配候選最小方案，優先補足前文 EXACT Snapshot／NoMatch 尚未定義的同題內容，不以 TASK 覆蓋正式規格。業務與 Canonical 依 MOD-05 B-1c-01，三表依 Database-Schema，T2／T3 依 MOD-02 同名章節；不是 Production／Migration 授權。
+- 首次 EXACT T2 須核對本 Job 已 Completed 的 SHA256 來源與 B-1a／Manifest。候選限單部署核准集合、可跨 Batch、排除本 Image，只取 Completed、同 FileSize＋SHA256 且版本相容的 HashResult；不取所有同大小圖片。Pending／Processing／Failed／缺 Hash 明確不具當次資格，不等待或補算，多版本選擇歧義 Fail-Closed。
+- 三表為 processing_exact_inputs（Header 合併每 Job 唯一 Binding）、processing_exact_input_candidates（完整不可變明細）、exact_check_results（獨立完成結果與 Owner）。不使用 Generic Context JSON，不從目前 Group 還原歷史來源。
+- T2 短 Serializable transaction 完整查詢匹配資格、保護鍵範圍，原子保存 Header／Detail／fingerprint／Running；空集合亦保存，不以 CreatedAt／MAX(Id) 或截斷分頁代替切點。確認 Commit 才執行，SQL 不跨 Storage I/O。
+- Canonical v1 主／子 Schema 依 MOD-05；schemaVersion 自動輸出，候選 fingerprint 依 ImageId ASC、空集合 []。JobId／SnapshotId 為固定業務輸入，排除 GroupId／Outcome／RunNo／AttemptNo／TraceId；所有子 fingerprint 可由保留的來源引用重建。Scope／CandidateSelectionVersion 不填 latest/default。
+- 非空集合 T3 提交 Completed／Match 及合法 Group／Membership；空集合提交 Completed／NoMatch、GroupId NULL、MatchedCount=0，不建假 Group。MatchedCount 是原 Snapshot 數，不是目前 Group 數；兩者是 Success，不是 Skipped／Failed。結果僅成功 T3 插入，沒有無用途 Pending／Processing 結果或 Failed Result Attempt。
+- Result／必要 Group／Member／Checkpoint／History／投影同 T3。Group 併發沿原 Unique／交易處理，來源不一致不覆寫。Completed 不變，晚到來源不改舊 Snapshot／NoMatch History。
+- T2／T3 Unknown 先核對原持久提交證據；Resume／合資格 ManualRetry 沿原 Snapshot／Manifest。從未開始 EXACT 才在首次合法 T2 凍結候選，不猜過去集合；不擴大 T5、不以 timeout／Cancellation 關閉 Running。
+- 可核對重用 Completed HashResult，但不直接跨 Job 重用 Job-scoped EXACT 完成結果。後續驗收須包含空 Snapshot 與獨立 NoMatch、匹配資格及未完成排除、版本歧義、晚到、T2 回滾、Group 競爭、Commit Unknown、原輸入重建。
+- 三表／Provider／Writer／版本發布解析、實際索引／鎖競爭／交易時間／高併發與 Crash 驗證仍未交付；N-01／N-02、F-04-01 其他來源與 Recovery 保留。未改 MOD-01／API／ErrorCode／既有唯一鍵／StepOutcome R3，不宣稱 TASK-04 完成，不開始 VISUAL／VERSION／pHash 或其他實作。
+
 ## 15. Out of Scope
 
 實作 EXIF／SHA256 duplicate／pHash／Naming 演算法、任意通用 Context 欄位、修改 Upload input、決定 N-01/N-02。
