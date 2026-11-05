@@ -1563,6 +1563,48 @@ Resolved/Expired與原start/deadline保留歷史。Waiting checkpoint不是任�
 排序Score/Quality/Resolution/Sharpness/Metadata DESC、ImageId ASC；confidence沿用gap>=15 High、>=5 Medium、其餘Low。reasons固定code、有資料依據：Quality>=mean+5，其餘sharpness/resolution/exposure>mean，Metadata=100才CompleteMetadata。
 唯一(SnapshotId,QualityRuleVersion,RecommendationRuleVersion)持久化ranked result與inputs/resultVersion/Completed；snapshot merge/input版本改則Stale，不偷偷覆寫或自動重分析。既有GET入口包含snapshot/version/ranking/singleton/empty，不新增獨立rankingAPI。single-link同群不是每pair達標/可删保證。
 
+## B-1c-03 核准補充：VERSION Frozen Input／Adapter 最小邊界
+
+本章依人工批准補足 TASK-04 的必要來源及交接不變量，不定稿完整 Recommendation Scope、Canonical 或持久 Schema。最終 F-06 優先於早期同題描述；本章不改推薦公式、既有唯一鍵、T1～T5、StepOutcome R3 或已批准 VERSION T2-W，也不是 Reader／Writer 或 Runtime 實作授權。
+
+### Frozen Input 與准入
+
+| 必要來源 | Context／Adapter 准入要求 |
+|---|---|
+| 原 Job／WorkflowVersion／Frozen Rule Manifest | 沿原持久綁定核對核准版本，不使用目前部署設定替換 |
+| 已提交 VISUAL SnapshotId | 核對 Completed、來源版本、原 Owner Checkpoint／History 及提交證據，不使用最新 Current Pointer 代替已選來源 |
+| 核准 Recommendation Scope／完整 Member 集合 | 範圍明確、固定且持久可重建；不能從 fingerprint 或目前查詢的部分資料推定集合 |
+| 每位 Member 的 ImageId／ContentVersion | 與原 Snapshot、Quality 及必要 pHash 來源一致，不重選目前內容 |
+| Completed QualityResultId／QualityRuleVersion | 每位必要 Member 都有核准且相容的已提交結果，精確固定引用，不取最新 QualityResult、不將缺分當零 |
+| RecommendationRuleVersion | 由原 Frozen Rule Manifest 解析，缺原版本即阻擋 |
+| 必要 pHash ResultId／ProfileVersion／ProfileManifestChecksum | 沿原 Snapshot 的完整來源鏈核對；Profile checksum 不與 Job 根 Rule ManifestChecksum 混用 |
+| 具名 InputReferences／Canonical InputFingerprint | 完整、有序、可重建，指紋由核准 Canonical v1 輸入產生；不是可反推遺失 Member 的替代資料 |
+
+Adapter 只接收已核准、完整且可核對的推薦集合。缺必要來源、版本不符或 Scope 有歧義時 Fail-Closed，不以假資料、最新引用或未完成結果取得執行資格。共通 Step Evidence Identity 不代表整個集合來源已完整；具體來源與提交證據仍須核對，不新增 Provider／Adapter Signature。
+
+### Snapshot／Group Scope 仍待正式決策
+
+待決問題是：F-06 的推薦集合為完整 visual_snapshots.Id 下全部 Members，還是另有正式定義的群組範圍？SnapshotId 可定位物理成員，不單獨證明所有 Group 應一起排名。
+未獲批准前，不自行跨 Group 混合排名、不改為每 Group 獨立排名、不新增 VERSION Group、不修改公式或 UNIQUE(SnapshotId,QualityRuleVersion,RecommendationRuleVersion)。不以一般 Context Provider 介面掩蓋此問題，也不宣稱完整 Canonical Schema 已定稿。
+
+### VERSION T2-W／T2／T3 交接
+
+首次 Waiting 前必須已有持久證據固定原 Snapshot、核准推薦範圍、完整 Member 身分及原規則。沒有此證據時不得進入看似合法但無法恢復的 Waiting；具體 Job→Snapshot Binding 尚待定稿，不因結果表已有 InputReferences 欄位就宣稱此能力存在。
+合法缺少 Quality 的等待沿 F-06：初次以 DB UTC 固定 StartedAt／DeadlineAt，使用原核准可設定 MVP 預設120秒；Scanner 依原每5秒及交易核對規則檢查。Waiting 不占 Worker、不建 Running Invocation、不消耗 Retry；Crash／Resume、重複通知或新部署不重設 Deadline／改變原等待資格，停機時間計入。DB now>=deadline 沿既有到期優先及 DEPENDENCY_NOT_READY Permanent 處置，無實際 Invocation 不偽造 History，不擴充至 VISUAL Waiting。
+所有必要 Quality 就緒後，核對原 Snapshot／Scope、每位 Member 的原內容、Quality 版本及來源，一次固定所有 Completed QualityResultId；完整 InputReferences／Fingerprint、Waiting→Resolved 與合法 Running Invocation 在同 T2 交易保存，確認 Commit 後才允許 Adapter 執行。原本沒有進入 Waiting 的合法就緒路徑仍沿原 T2，不虛構等待紀錄。
+T3 才保存實際計算所得 RankedResults、合法結果引用及原 History／Checkpoint 等交易內容。T2 Unknown 先查原輸入綁定／引用／Checkpoint／Invocation；T3 Unknown 先查原結果、Owner 與提交證據，不重新選來源或盲目重複提交。Resume／合資格 ManualRetry 沿原已固定 Business Input，不以新 Run 換集合／版本，不改 T5 資格；Cancellation／失聯不證明原 Invocation 已停止。
+
+### Input／Result、重用及特殊集合
+
+InputReferences 是本次已選來源證據，RankedResults 是實際計算後輸出；不得要求尚未執行的 Step 預先提供 RankedResults。具體 Input Binding、等待前綁定與 T2／T3 的物理保存階段、Nullability、唯一鍵衝突處置及完整 Canonical 欄位須待 Scope 定稿，不新增通用 Context JSON 或擅改 Database-Schema。
+Completed 重用必須核對完整 InputFingerprint、原 Snapshot／Member／QualityResult、版本相容、原 Owner Checkpoint／History 與已提交狀態。相同 Unique Key 不代表完整來源相同；同鍵不同完整來源時 Fail-Closed，不覆寫 Completed、不接管原 Owner、不新增 Result Attempt。Current／Stale 是結果新鮮度，不是 JobStatus，也不授予重新分析權。
+真正 Empty 沿既有合法 Skipped，但須完整集合來源證據；Singleton 沿既有 Success，須完整且就緒的單一 Member 證據。缺 Quality 不等於 Empty，Scope 不明不能冒充 Empty／Singleton；相關 Quality 永久失敗依 F-06 終止 Step／Run／Job，不刪掉該 Member 後繼續排名，也不將無關版本失敗當原依賴失敗。具體 Empty／Singleton 結果保存形式仍由 MOD-08 後續定稿，不偽造 Result／Invocation／History。
+
+### 責任與 Remaining Blockers
+
+TASK-04 負責 VERSION 必要來源、Context／Adapter 准入與 Fail-Closed、Rule／Snapshot／QualityResult 一致性、持久重建／Fingerprint 要求及原 VERSION T2-W 交接不變量。MOD-08／後續整合負責正式 Scope、Ranking／Scoring、真實 Reader／Writer、Job→Snapshot Binding、InputReferences／RankedResults 持久化、Schema／Migration、SQL 並行及 Crash／Recovery Integration Tests；不提前擴張 TASK-04。
+Scope、Waiting 前持久定位、完整 Member QualityResult 選擇、InputReferences 物理保存階段、完整 Canonical、Result Unique Key 與完整來源一致性仍待定稿。N-01／N-02、Manifest Registry、具體 Provider／Recovery 尚未交付；不更動 VISUAL 等待政策或其他模組契約，不宣稱 TASK-04 COMPLETE 或完整 Analysis／Full Runtime READY。BOUNDARY DOCUMENTATION COMPLETE 僅表示本章邊界文件完成。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。

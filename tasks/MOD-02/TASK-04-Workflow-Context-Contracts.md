@@ -255,6 +255,17 @@ Workflow/context/adapter contracts 與純測試一組；feat(mod-02): define wor
 - T2-W 仍只批准 VERSION_ANALYSIS；VISUAL Timeout／允許範圍、到期／永久失敗診斷、Scanner／等待恢復及無 pHash 生產路徑處置未定。短交易、Deadline、釋放 Worker、無 Running／不耗 Retry 只保留方案方向，不套120秒、不改 SQL CHECK、不新增 ErrorCode／JobStatus。
 - N-01、N-02、F-04-01、候選內容來源／空集合／跨 Job 重用及 Current 發布順序／跨 Profile 政策仍阻擋。保留 Workflow、0.85、single-link、1000 Candidates／50000 Edges、StepOutcome R3 與 EXACT／QUALITY／NAMING。BOUNDARY DOCUMENTATION COMPLETE 不代表 TASK-04 COMPLETE、N-02 已解決或 VISUAL／Analysis／Full Runtime READY。
 
+## B-1c-03 核准補充：VERSION 最小契約邊界
+
+本節記錄 MOD-08／MOD-02 B-1c-03 的文件批准，只定稿必要來源及交接不變量，不以 TASK 批准 Scope、完整 Canonical、Schema 或 Reader／Writer 實作。
+- VERSION 必須有原 Job／Workflow／Manifest、已提交 Snapshot、已核准 Scope 與完整固定 Members、各內容版本／Completed QualityResultId、Quality／Recommendation 規則及必要 pHash／ProfileManifestChecksum；具名有序 InputReferences 可持久重建及核對 fingerprint。不換最新來源、不以缺 Quality 當零／Empty、不由 fingerprint 反推集合。
+- Snapshot 全部 Members 或群組範圍仍待正式決策；Adapter 未取得核准完整集合即 Fail-Closed。不自行混算、分組排名、新增 VERSION Group 或改公式／Unique Key，不宣稱完整 Canonical 定稿。
+- Waiting 前須有原 Snapshot／Scope／Members／規則的持久定位，缺證據不得進入等待。沿原 VERSION 的 DB UTC、可設定120秒預設、每5秒 Scanner、到期優先及 DEPENDENCY_NOT_READY；Waiting 不占 Worker／不建 Running／不耗 Retry，Crash／Resume 不重設期限，無 Invocation 不偽造 History，不擴充 N-02。
+- Ready 的 T2 一次固定全部合法 QualityResultId、InputReferences／Fingerprint，與 Waiting→Resolved／Running 同交易，Commit 確認後才執行。T3 才保存 RankedResults 與合法結果／History／Checkpoint；Unknown 先查原證據。InputReferences 與輸出分離，既有欄位不是已交付持久凍結能力。
+- 重用核對完整輸入／版本／Owner Checkpoint／History；同鍵不同來源 Fail-Closed，不覆寫 Completed、不新增 Result Attempt，Current／Stale 不是 JobStatus。真正 Empty／Singleton 沿 Skipped／Success 並須完整來源；永久 Failed Quality 不得刪 Member 後繼續，Scope 不明不得冒充。
+- TASK-04 負責 Frozen Input、Context／Adapter 准入、核對／重建／fingerprint 及等待交接。MOD-08／後續整合負責 Scope、Ranking、Reader／Writer、Job→Snapshot Binding、實際 InputReferences／RankedResults 持久化、Schema／Migration 與 SQL 並行／Recovery 測試。
+- Scope、Waiting 前綁定、Member Quality 來源選擇、物理保存階段／Nullability、完整 Canonical、Unique Key 一致性仍待定稿；N-01／N-02、Manifest Registry、Provider／Recovery 保留。BOUNDARY DOCUMENTATION COMPLETE 不代表 TASK-04 或 Analysis／Full Runtime 完成，不開始 B-2／B-3 或實作。
+
 ## 15. Out of Scope
 
 實作 EXIF／SHA256 duplicate／pHash／Naming 演算法、任意通用 Context 欄位、修改 Upload input、決定 N-01/N-02。

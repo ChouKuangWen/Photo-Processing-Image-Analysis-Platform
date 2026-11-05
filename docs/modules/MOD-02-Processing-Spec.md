@@ -1926,6 +1926,17 @@ N-01 Decoder／ICC／Engine 精確版本未批准，N-02 VISUAL DependencyWait �
 - Commit Unknown 先核對原提交證據；恢復及合法 ManualRetry 不重選已凍結來源，不因失聯／Cancellation 自行關閉 Running。具體持久形狀、完整 Canonical、跨 Job 重用及 Current 發布順序／跨 Profile 政策仍待批准，不以本節擴大 SQL Writer 或 Provider Signature。
 - TASK-04 只定義必要輸入與核對邊界；MOD-06／後續整合交付資格／生產策略、正式 Waiting、Reader／Writer、Pointer、Engine／Profile、Migration／驗證。不改 EXACT／QUALITY／NAMING 或 Workflow／0.85／single-link／1000／50000 契約；N-01／N-02／F-04-01 未解除，Analysis／Full 不宣稱可執行。
 
+## B-1c-03 核准補充：VERSION Input 與等待交接邊界
+
+本節依 MOD-08 B-1c-03 補足已核准 VERSION T2-W 的來源必要條件，不改 T1～T5／StepOutcome R3、不擴充 VISUAL 等待，不批准完整 Scope、Canonical 或 DDL。
+- VERSION 准入須核對原 Job／WorkflowVersion／Frozen Manifest、已提交 Completed VISUAL Snapshot、核准推薦範圍與完整固定 Members、各 ImageId／ContentVersion、Completed QualityResultId、Quality／Recommendation 規則及必要 pHash ResultId／ProfileVersion／ProfileManifestChecksum。InputReferences 必須具名、有序、持久可重建且可核對 Canonical fingerprint；不取最新 Pointer／Quality，不由指紋反推成員，不將缺 Quality 當零或 Empty。
+- F-06 優先於早期同題描述，但完整 Snapshot 或群組範圍仍待 MOD-08 決策。Scope 不明時 Adapter Fail-Closed，不跨 Group 混算、不自行分組排名、不新增 VERSION Group、不改公式或唯一鍵。
+- 首次 Waiting 前先有原 Snapshot／Scope／Member 身分／原規則的持久定位證據；沒有則阻擋，不能建立無法恢復的等待。合法等待仍用 DB UTC 固定 StartedAt／DeadlineAt、原可設定120秒預設與每5秒 Scanner 規則；不占 Worker、不建 Running、不耗 Retry，Crash／Resume／部署不重設期限或資格。
+- Ready 時核對全部來源並一次固定 Completed QualityResultId；完整 InputReferences／Fingerprint、Waiting→Resolved 與合法 Running 同 T2，Commit 確認才執行。Deadline 到期優先及 DEPENDENCY_NOT_READY 政策不變；沒有實際 Invocation 不偽造 History。相關永久 Failed Quality 依 F-06 終止，不移除 Member 後繼續。
+- RankedResults 是 T3 輸出，不能當 T2 必填輸入。T2／T3 Unknown 查原輸入／Invocation／結果／Owner／History，不重選或重複提交。Resume／合資格 ManualRetry 沿原固定業務輸入，不改 T5；未知執行狀態仍遵守原 Recovery。
+- Completed 重用核對完整 fingerprint、原集合／Quality 引用、版本、Owner Checkpoint／History；同 Unique Key 不同完整來源 Fail-Closed，不覆寫或新增 Result Attempt。Current／Stale 不等於 JobStatus。真正 Empty／Singleton 依原 Skipped／Success，須完整合法來源，Scope 不明或缺 Quality 不能冒充。
+- TASK-04 只交付輸入、准入／Fail-Closed、版本核對與等待交接要求。Scope、Job→Snapshot Binding、Quality 選擇、InputReferences 的物理保存階段／Nullability、完整 Canonical、唯一鍵衝突處置及 Reader／Writer／Migration／SQL 驗證留 MOD-08／後續整合；既有結果欄位不代表凍結已實作。N-01／N-02、Manifest Registry、Provider／Recovery 保留阻擋，不宣稱 Analysis／Full 或 TASK-04 已完成。
+
 ## 最後一致性檢查發現：N-02候選pHash就緒的調度契約
 
 正式VISUAL_SIMILARITY要求完整同版本候選snapshot，Workflow將其放在Quality前；其他Image仍可能在Pending或尚未pHash。F-06核准的T2-W dependency wait目前只限VERSION_ANALYSIS，沒有定義VISUAL候選未齊時的等待／釋放Worker／恢復／到期。不能使用partial hash集合冒充完整snapshot，也不能占滿所有Worker等待其他Job。
