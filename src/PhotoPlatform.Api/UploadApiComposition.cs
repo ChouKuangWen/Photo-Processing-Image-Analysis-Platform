@@ -40,6 +40,10 @@ public static class UploadApiComposition
             Required(configuration, "Upload:StorageRoot")));
         services.AddSingleton<IFileValidationService>(_ => new FileValidationService(
             configuration.GetValue<long>("Upload:MaxFileSizeBytes")));
+        services.AddScoped<IImageContentReader>(provider => new ImageContentReader(
+            provider.GetRequiredService<PhotoPlatformDbContext>(),
+            provider.GetRequiredService<IFileStorageService>(),
+            configuration.GetValue<long>("Upload:MaxFileSizeBytes")));
 
         // Queue 使用 Singleton，讓所有 Request 與未來的 Worker 共用同一個佇列。
         // 目前只註冊 Queue，本 TASK 不負責啟動背景 Worker。

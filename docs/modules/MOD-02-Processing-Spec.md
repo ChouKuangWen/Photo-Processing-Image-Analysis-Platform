@@ -1853,6 +1853,14 @@ Assessment 後、T1 前已知來源改變時，不得用舊 assessment Claim；�
 
 ## B-1c-00 核准補充：完整 Workflow 規則凍結
 
+### TASK-05 Root v1 與實作准入批准
+
+Root／Step／ResourceReference 的嚴格 JSON UTF-8 v1 欄位及 byte identity 依 System-Level B-1c-00「TASK-05 人工核准：Root Manifest v1」。正式接點為 IRuleManifestResolver.ResolveAsync(long jobId, CancellationToken)，回傳 Task<ResolvedRuleManifest>；不接受 role／resourceId 別名、不使用 Step Canonical Serializer。
+
+部署固定 Workflow → ManifestId／Checksum；首次准入另需可靠證據，缺 Binding 的 Legacy Job 不補綁，已有 Binding 沿原身分。格式／介面已批准，不再作為阻擋；子資源、已交付規則實作及首次准入證據缺少時仍拒絕，不填 Provider／Engine／Profile 或假版本。
+
+跨 Job checksum 採 transaction-owned sp_getapplock，先 Manifest 再 Job／Run／checkpoint，鎖涵蓋一致性查詢與 Binding INSERT 至 Commit／Rollback，處理負回傳碼、逾時及取消。單獨鎖元件不代表 T1 已完成。錯誤沿 FrozenInputUnavailableException 四分類，取消不轉為 Failed。其他 T1／T2、不可變 Binding、Commit Unknown 及 N-01／N-02 不變。
+
 依 System-Level 同名補充採 Job-level Immutable Rule Manifest Reference，Schema 依 Database-Schema processing_rule_manifest_bindings。此章優先補足先前 B-1a／B-1b 的「尚未執行 Step 缺原 RuleVersion 持久選擇」同題待決；不是宣稱 Provider／Registry 已實作，也不改各模組規則、T1～T5、StepOutcome R3 或已核准 Canonical。
 
 ### 覆蓋矩陣

@@ -24,7 +24,7 @@ public sealed class ProcessingSchemaModelTests
     public void Model_BuildsQueriesIncludingLogMaterializationWithoutConnecting()
     {
         using var db = CreateContext();
-        Assert.Equal(7, db.Model.GetEntityTypes().Count());
+        Assert.Equal(10, db.Model.GetEntityTypes().Count());
         Assert.Contains("processing_logs", db.ProcessingLogs.AsNoTracking().ToQueryString());
         Assert.Contains("processing_runs", db.ProcessingRuns.AsNoTracking().ToQueryString());
         Assert.Contains("processing_step_checkpoints", db.ProcessingStepCheckpoints.AsNoTracking().ToQueryString());
@@ -40,7 +40,7 @@ public sealed class ProcessingSchemaModelTests
     {
         using var db = CreateContext();
         var assembly = db.GetService<IMigrationsAssembly>();
-        Assert.Equal(2, assembly.Migrations.Count);
+        Assert.Equal(3, assembly.Migrations.Count);
         var initial = assembly.CreateMigration(assembly.Migrations.Single(pair => pair.Key.EndsWith("_InitialUploadPersistence")).Value,
             db.Database.ProviderName!);
         var execution = assembly.CreateMigration(assembly.Migrations.Single(pair => pair.Key.EndsWith("_AddProcessingExecutionPersistence")).Value,
@@ -65,7 +65,7 @@ public sealed class ProcessingSchemaModelTests
         var differences = db.GetService<IMigrationsModelDiffer>()
             .GetDifferences(oldModel.GetRelationalModel(), current.GetRelationalModel());
         Assert.All(differences, operation => Assert.True(operation is CreateTableOperation or CreateIndexOperation));
-        Assert.Equal(4, differences.OfType<CreateTableOperation>().Count());
+        Assert.Equal(7, differences.OfType<CreateTableOperation>().Count());
     }
 
     // 測試目的：確認產生的升級 SQL 不會重建或刪除舊表資料。

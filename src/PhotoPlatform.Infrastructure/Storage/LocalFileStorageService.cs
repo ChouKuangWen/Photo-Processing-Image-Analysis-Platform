@@ -10,6 +10,7 @@ public sealed class LocalFileStorageService : IFileStorageService
     private readonly string _storageRoot;
     // 保存「產生字串的函式」，不是已產生的識別碼；每次 Save 呼叫它時才取得識別碼。
     private readonly Func<string> _identifierFactory;
+    private readonly Action<string>? _beforeReadComponent;
 
     // 正式使用時只需提供儲存根目錄；檔案識別碼由服務產生，避免受使用者檔名控制。
     // : this(...) 將初始化交給下方的雙參數建構子，兩個建構子共同初始化同一個物件。
@@ -23,12 +24,19 @@ public sealed class LocalFileStorageService : IFileStorageService
     // 正式呼叫傳入隨機 GUID 函式；測試可傳入回傳固定值的函式，穩定製造同名檔案。
     // UnitTests 透過 InternalsVisibleTo 存取此建構子，不必使用 Reflection 或新增公開測試入口。
     internal LocalFileStorageService(string storageRoot, Func<string> identifierFactory)
+        : this(storageRoot, identifierFactory, null)
+    {
+    }
+
+    // Controlled synchronization point for security tests; never configured by the public constructor.
+    internal LocalFileStorageService(string storageRoot, Func<string> identifierFactory, Action<string>? beforeReadComponent)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storageRoot);
         ArgumentNullException.ThrowIfNull(identifierFactory);
         // 在建立服務時把相對目錄轉成絕對路徑，避免後續工作目錄改變而指向不同位置。
         _storageRoot = Path.GetFullPath(storageRoot);
         _identifierFactory = identifierFactory;
+        _beforeReadComponent = beforeReadComponent;
     }
 
     // 只保存完整 bytes 並回傳相對參照；圖片是否合法由 FileValidationService 負責。
@@ -137,6 +145,13 @@ public sealed class LocalFileStorageService : IFileStorageService
         }
 
         return storedPath;
+    }
+
+    public Task<Stream> OpenReadAsync(string storedPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ResolvePath(storedPath); // Validate the persisted reference syntax, not its filesystem identity.
+        return Task.FromResult(SecureLocalRead.Open(_storageRoot, storedPath, cancellationToken, _beforeReadComponent));
     }
 
     // 支援上傳失敗後的補償清理，重複刪除同一合法目標也應成功。

@@ -110,6 +110,7 @@ internal sealed class UploadFaultInjection
     // 同時記錄成功 Save 的 keys 與嘗試 Delete 的 keys。
     private sealed class StorageDecorator(UploadFaultInjection owner, IFileStorageService inner) : IFileStorageService
     {
+        public Task<Stream> OpenReadAsync(string storedPath, CancellationToken token) => inner.OpenReadAsync(storedPath, token);
         // 可讓第二次 Save 故意失敗，模擬部分檔案已存成功、後續存檔失敗的情境。
         public async Task<string> SaveAsync(IUploadFile file, CancellationToken token)
         {

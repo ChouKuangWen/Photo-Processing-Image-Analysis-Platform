@@ -244,6 +244,7 @@ public sealed class PrimaryBindingPersistenceTests : IAsyncLifetime
 
     private sealed class UploadDependencies : IFileValidationService, IFileStorageService, IProcessingQueue
     {
+        public Task<Stream> OpenReadAsync(string storedPath, CancellationToken token) => throw new NotSupportedException();
         public Task<FileValidationResult> ValidateAsync(IUploadFile file, CancellationToken cancellationToken)
             => Task.FromResult(new FileValidationResult(true, null, null));
         public Task<string> SaveAsync(IUploadFile file, CancellationToken cancellationToken)

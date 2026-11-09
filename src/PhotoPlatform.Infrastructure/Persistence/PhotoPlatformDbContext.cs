@@ -14,6 +14,9 @@ public sealed class PhotoPlatformDbContext(DbContextOptions<PhotoPlatformDbConte
     public DbSet<ProcessingStepCheckpoint> ProcessingStepCheckpoints => Set<ProcessingStepCheckpoint>();
     public DbSet<ProcessingLog> ProcessingLogs => Set<ProcessingLog>();
     public DbSet<ImageProcessingBinding> ImageProcessingBindings => Set<ImageProcessingBinding>();
+    public DbSet<ProcessingRuleManifestBinding> ProcessingRuleManifestBindings => Set<ProcessingRuleManifestBinding>();
+    public DbSet<ProcessingOriginalInput> ProcessingOriginalInputs => Set<ProcessingOriginalInput>();
+    public DbSet<ProcessingOriginalStepInput> ProcessingOriginalStepInputs => Set<ProcessingOriginalStepInput>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -25,5 +28,8 @@ public sealed class PhotoPlatformDbContext(DbContextOptions<PhotoPlatformDbConte
         modelBuilder.ApplyConfiguration(new ProcessingStepCheckpointConfiguration());
         modelBuilder.ApplyConfiguration(new ProcessingLogConfiguration());
         modelBuilder.ApplyConfiguration(new ImageProcessingBindingConfiguration());
+        modelBuilder.ApplyConfiguration(new ProcessingRuleManifestBindingConfiguration());
+        modelBuilder.ApplyConfiguration(new ProcessingOriginalInputConfiguration());
+        modelBuilder.ApplyConfiguration(new ProcessingOriginalStepInputConfiguration());
     }
 }

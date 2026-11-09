@@ -2780,9 +2780,19 @@ D-13只延後新Export能力，完整原規格保留；MOD10未通過完整實�
 
 ### 規則身分與發布責任
 
+#### TASK-05 人工核准：Root Manifest v1
+
+Root 採 JSON UTF-8、無 BOM，formatVersion 固定整數1。必填非 NULL 欄位只有 formatVersion、manifestId（字串，最長100）、workflow（正式名稱）、workflowVersion（字串，最長50）、steps（有序陣列）。Step 只有 step（字串，最長50）、stepOrder（正整數）、ruleVersion（字串，最長50）、resources（陣列）；集合及順序精確符合 WorkflowDefinition。
+
+ResourceReference 只有 kind、id、version、checksum 四個必填非 NULL 字串，不接受 role／resourceId 別名。kind 區分 Rule／Profile／Engine／Provider／TargetPolicy；id 最長100，version 最長50，checksum 為64字元小寫 ASCII hex。具體資源需求與子格式仍沿各模組正式契約，空 resources 不證明可執行。識別／版本拒絕空白與 latest／default；拒絕重複、未知、缺少欄位及錯誤型別。發布方保留固定 bytes，消費端不重排、正規化或重新序列化計算 checksum；Root checksum 由受控發布資料提供，不放入 Root JSON。
+
+部署固定 Workflow → ManifestId／Checksum，已有 Binding 沿原身分；Pending 且缺 Binding 不足以排除 Legacy Job，首次准入另需可靠持久／部署證據，缺證據拒絕、不 backfill。Application 接點為 IRuleManifestResolver.ResolveAsync(long jobId, CancellationToken)，回傳 Task<ResolvedRuleManifest>。Infrastructure 核對根／子資源原始 bytes、核准來源及已交付實作相容性；沿既有 FrozenInputUnavailableException 四分類，Cancellation 保留。格式批准不代表子資源、規則實作或執行權已交付。
+
+跨 Job 同 ManifestId checksum 核對使用 SQL transaction-owned sp_getapplock，先 Manifest 再 Job／Run／checkpoint，檢查取得結果、逾時及取消；一致性查詢與 Binding INSERT 至 Commit／Rollback 持續持鎖。所有 Writer 必須遵守同協定，不以普通 SELECT 後 INSERT 代替；ManifestId 不設 UNIQUE，不新增 Registry Table、Owner／Lease／RowVersion。
+
 每個 Job 在首次 T1 綁定一份不可變 Rule Manifest。WorkflowVersion 固定流程定義，不單獨識別規則組合；相同 WorkflowVersion 可以有不同 ManifestId。ManifestId 不得是 latest alias、可變設定名稱，或可被重新指向目前部署設定的入口。
 Manifest 必須包含格式版本、ManifestId、Workflow 類型、WorkflowVersion、完整且有序的實際 Step／StepOrder、各 Step RuleVersion、必要 ProfileVersion、影響業務輸出的 Provider／TargetPolicy 具名版本引用，以及每個子 Manifest 的不可變身分與內容校驗資訊。不得預存尚未產生的 ResultId／SnapshotId／QualityResultId、候選集合、Invocation Identity、Secret、原圖 bytes 或任意 Context JSON。
-每個發布格式版本必須有固定且可驗證的具名結構、欄位型別、必要／可空欄位、順序與序列化規則；發布時一次產生固定 UTF-8 bytes 並保留原檔。消費端校驗原始發布 bytes，不將解析後物件依本機序列化器重新輸出作為內容身分，也不自行正規化文字、換行或格式。格式版本、受控發布檢查與具體資源尚未交付前，解析路徑仍阻擋；本章不新增序列化 Public API 或任意業務版本值。
+每個發布格式版本必須有固定且可驗證的具名結構、欄位型別、必要／可空欄位、順序與序列化規則；發布時一次產生固定 UTF-8 bytes 並保留原檔。消費端校驗原始發布 bytes，不將解析後物件依本機序列化器重新輸出作為內容身分，也不自行正規化文字、換行或格式。Root v1 已按上述補充定稿；受控發布檢查、具體資源及已交付實作相容性不足時，執行准入仍阻擋，不自行填入任意業務版本值。
 ManifestChecksum = SHA256(已發布 Manifest 的固定 UTF-8 bytes)，精確 64 字元小寫 hex；不同環境必須取得同一份 bytes。它不等於 Step InputFingerprint，也不證明規則已核准或 Job 已取得執行權。同 ManifestId 必須永遠對應同內容及 checksum；內容改變須使用不同身分，不默默替換。子 Manifest 也須以不可變身分及校驗資訊固定，不能只鎖住根檔案而讓其依賴指向最新版。
 
 MVP 採受控發布的不可變版本資源。發布／部署維護責任包含保留原始 bytes、所有引用的子 Manifest 與必要歷史版本，驗證核准來源及 checksum，並確認原 Rule／Engine／Profile 實作仍可執行。新部署不得悄悄重指舊身分、升級舊 Job、以最新規則 backfill 或自動清理歷史資源。SQL 保存 ManifestId 不等於歷史資源已可靠保存；缺原內容、校驗不符、版本不可解析或原實作不可執行時 Fail-Closed。實際保存、解析與核准接點仍是 Implementation Blocker。

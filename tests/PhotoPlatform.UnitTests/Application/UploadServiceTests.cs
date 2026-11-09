@@ -358,6 +358,7 @@ public sealed class UploadServiceTests
     // 用來記錄呼叫順序、模擬失敗與 Cancellation，不會真的連 SQL Server 或檔案系統。
     private sealed class Rig : IFileValidationService, IFileStorageService, IUploadPersistence, IUploadTransaction, IProcessingQueue
     {
+        public Task<Stream> OpenReadAsync(string storedPath, CancellationToken token) => throw new NotSupportedException();
         // 記錄各階段實際執行順序。
         public readonly List<string> Events = [];
 

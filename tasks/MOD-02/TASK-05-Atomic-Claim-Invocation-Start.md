@@ -3,7 +3,7 @@
 **Task ID:** MOD-02-TASK-05  
 **Module:** MOD-02 Processing  
 **Task Name:** T1／T2 SQL Atomic Claim 與 Invocation Start  
-**Status:** PLANNED  
+**Status:** ACCEPTANCE PASS — DOWNSTREAM RUNTIME DEPENDENCIES REMAIN
 **Architecture:** Clean Architecture  
 **Planning Baseline:** `1460fb1b4ae9b76e492adde262988f03c19934ba`  
 **Planning Branch:** `feature/mod-02-processing`
@@ -28,6 +28,8 @@
 - **本 TASK 新增**：第 7 節範圍；前置 TASK 的類別與方法不得另建重複版本。
 - **後續負責**：第 7、11、15 節指定的後續整合／驗收不能在此冒稱完成。
 - **待決策／外部依賴**：N-01 引擎/版本、N-02 VISUAL 候選調度仍未決；不阻擋無關核心，不能以測試替身解除真實 Workflow 依賴。
+- **人工批准的必要前置交付**：依 `docs/Database-Schema.md` B-1a／B-1c-00 原定義，納入 `processing_rule_manifest_bindings`、`processing_original_inputs`、`processing_original_step_inputs` 的 Entity／Mapping 及一個限定範圍的新增式 EF Core Migration。欄位、PK／FK／NULL／CHECK、版本及不變量完全沿用正式 Schema，不新增 Registry 表、通用 JSON、Owner／Lease，不修改 MOD-01 Upload Mapping，不自動 backfill。
+- **後續人工批准的實作准入**：Root JSON UTF-8 無 BOM v1、Root／Step／ResourceReference 精確欄位、IRuleManifestResolver.ResolveAsync(long jobId, CancellationToken) → Task<ResolvedRuleManifest>、固定部署 Workflow → ManifestId／Checksum、原始 bytes 校驗及 transaction-owned sp_getapplock 已批准，依 System-Level／MOD-02 B-1c-00。Foundation／Reader 已交付，完整 T1／T2 仍須實作驗收；正式子資源、已交付規則實作及可靠首次准入證據不足時拒絕，不將缺 Binding 的 Legacy Job 當成新 Job，不重開 TASK-04。
 
 
 
@@ -45,7 +47,7 @@
 8. 第 4 節 Existing Code／Tests。
 
 `docs/INDEX.md` 只導航；`docs/reviews/Specification-Revision-Review.md` 用於核對決策與歷史，不覆蓋正式契約。
-重點來源：MOD-02 §1.8、§1.18～§1.20、§1.22；Database-Schema §3～§6。
+重點來源：System-Level B-1c-00；MOD-02 §1.8、§1.18～§1.20、§1.22、B-1a／B-1c-00；Database-Schema §3～§6、B-1a／B-1c-00。
 正式規格同題的最終核准章取代歷史待決文字；舊「MOD-01未合併」描述為歷史審查基準，目前已合併，不當成缺陷。來源若已變更，重新審查受影響範圍。
 
 ## 4. Existing Components / Reuse
@@ -58,6 +60,7 @@
 
 ## 5. Expected Files
 
+- 前置交付：三張既定 Binding 表對應的 Domain Entities、Infrastructure EF Configurations、DbContext 集合／設定，以及一個新增式 Migration、Designer 與 ModelSnapshot 更新；須另獲明確實作授權，不改寫舊 Migration。
 - 新增 Application/Interfaces/IProcessingExecutionStore.cs 及受控 Claim/Invocation 結果 DTO
 - 新增 Infrastructure/Persistence/ProcessingExecutionStore.cs（或同責任小型元件）
 - 新增 IntegrationTests/Processing/AtomicClaimTests.cs、InvocationStartTests.cs 與 fault injection 支援
@@ -73,7 +76,7 @@ Application 協調並只接受已確認的 durable identity；Infrastructure 執
 ## 7. Implementation Requirements
 
 1. Queue snapshot 只取 ProcessingJob.Id；重新讀持久狀態，不能信任 Queue 的 Status／RetryCount／Error。
-2. T1 鎖定 Job/未關閉Run、核對 binding/context，Pending→Processing、Initial Active Run 或 Pending Run→Active、checkpoint Processing、配置 AttemptNo/ResumeNo、新增 Running Log、必要 primary aggregate 同 commit。
+2. T1 鎖定 Job/未關閉Run、核對 binding/context，首次原子保存 Manifest Binding、共用原圖 Binding 與 Workflow 所需原圖型 Step Bindings，Pending→Processing、Initial Active Run 或 Pending Run→Active、checkpoint Processing、配置 AttemptNo/ResumeNo、新增 Running Log、必要時間／counter／primary 狀態及 aggregate 同 commit。Binding 僅可建立或核對完全一致資料，不改綁、不以最新版本或 upsert 覆寫；後續 Step 不提前建立 Running Log。
 3. 只有 Id 匹配且 DB Pending 的原子條件更新成功者可取得執行資格；Processing/Completed/Failed 重複通知無執行／覆寫副作用。UNIQUE(ImageId,Workflow) 不替代 Claim。
 4. T2 僅 Job Processing＋Run Active＋eligible checkpoint；依 order／NextRetryAt／budget 鎖定後配置下一 invocation。同 Run Step 序列執行。
 5. AttemptNo/ResumeNo 的配置與 INSERT 在鎖定 checkpoint 的交易內，不能裸 MAX+1。首次開始 RetryOrdinal>0 且 ResumeNo=0 才增加 Job.RetryCount。
@@ -84,7 +87,9 @@ Application 協調並只接受已確認的 durable identity；Infrastructure 執
 
 ## 8. Database / Migration / Transaction Boundary
 
-T1/T2 更新原三表必要投影及新執行/binding表，無新 Migration。每次啟動是一筆原子 transaction；不能先提交 Job Claim 再建立 Run/Log。
+T1/T2 更新原三表必要投影及新執行/binding表；僅允許經批准的三張既定 Binding 表之新增式 Migration，限一個 Migration，且須另獲明確實作授權。完全沿用 Database-Schema B-1a／B-1c-00，不修改舊 Migration、既有 Upload Mapping 或增加其他欄位／資料表。每次啟動是一筆原子 transaction；不能先提交 Job Claim 或 Binding 再建立 Run／checkpoint／Running Log 及必要狀態。
+
+首次 T1 的 Manifest／原圖／原圖型 Step Bindings 與 Claim／Run／checkpoint／Invocation 同提交或回滾。Naming 只需 EXIF 原圖型 Binding、DuplicateDetection 只需 SHA256、Analysis／Full 需兩者但仍受 N-01／N-02 限制；不預造尚未產生的結果引用。Manifest 載入及完整 Storage I/O 在交易外完成，Commit 確認後才允許 Adapter；Root 格式批准不解除未交付正式資源的阻擋。先取得 Manifest transaction-owned applock，再鎖 Job／Run／checkpoint，鎖保持至提交／回滾。
 
 共用不變量：T1 是 Claim/Run/checkpoint/Running 同 commit；T2 是同 Run 下一 invocation；T3 是 result/History/checkpoint/必要終態與 aggregate；
 T4 僅安全 Startup Recovery；T5 僅人工 Retry。T2-W 僅核准的 VERSION_ANALYSIS 等待。不是本 TASK 擁有的交易不得另實作第二條路徑。
@@ -109,10 +114,12 @@ T4 僅安全 Startup Recovery；T5 僅人工 Retry。T2-W 僅核准的 VERSION_A
 
 ## 11. Integration Tests
 
+- 真實 SQL 驗證從既有 Migration baseline 新增三張 Binding 表，核對原定 PK／FK／NULL／CHECK／hash 精確字元與版本約束，確認舊資料及 MOD-01 Mapping 不變、不自動 backfill。
 - 真實 SQL 多連線同 Job Claim，僅一組 Active Run/Processing checkpoint/Running Log，只有勝者可執行。
-- 每個 T1 寫入點 fault injection，確認整筆回滾；無孤立 Run/Log/aggregate。
+- 並行 Claim 的 Binding 僅能一致核對，競爭者不得改綁或覆寫；不同 Job 共用同 ManifestId 合法，同 ID 不同 checksum 須依最終批准的一致性機制拒絕，不以普通 SELECT 後 INSERT 宣稱並行安全。
+- 每個 T1 寫入點（含三種 Binding、Claim、Run、checkpoint、Running Log 及必要狀態／aggregate）fault injection，確認整筆回滾；無部分 Binding 或孤立 Run/Log/aggregate。
 - T2 併發啟動同 checkpoint、Attempt identity unique；terminal Job 不 Claim。
-- 模擬 commit未提交及已提交但回應遺失，重新讀取確認，無雙重 invocation/RetryCount。
+- 模擬 commit未提交及已提交但回應遺失，以新 DbContext 核對原 Binding／Run／checkpoint／Invocation durable identity；未確認不執行 Adapter、不直接重跑整個 T1，無雙重 invocation/RetryCount。
 
 涉及 SQL Claim、unique、transaction、Migration、並行與持久恢復的驗收，必須使用真正 SQL Server，禁止 EF Core InMemory 替代。
 執行前核對隔離 Connection String 來源、生成測試 DB/Storage 範圍與清理目標，不輸出秘密；環境問題依 sqlserver-integration-test skill，不藉改 production code 繞過。
@@ -120,19 +127,34 @@ T4 僅安全 Startup Recovery；T5 僅人工 Retry。T2-W 僅核准的 VERSION_A
 
 ## 12. Acceptance Criteria
 
-- [ ] T1/T2 invariant 在真實 SQL 成立。
-- [ ] 缺 binding/context、DB錯誤、重複通知皆不導致分析副作用。
-- [ ] 保持原 Job schema/Queue signature；尚未有 Worker 不冒稱 runtime 已啟用。
+前批 Manifest／Reader 實作記錄：Root v1 Parser、唯讀部署 bytes 快照／Resolver 的安全拒絕、原圖型輸入候選與 frozen 核對，以及 transaction-owned Manifest checksum 鎖元件已交付。測試樣本均非正式發布資源；沒有核准且已交付的子資源／規則實作配對，也沒有可靠首次准入部署證據，Resolver 不授予執行准入。
+
+前批驗證：Restore 成功、Build 0 Errors／3 NU1900；Unit 524 Passed／0 Failed／4 Skipped，真實 SQL Integration 138 Passed／0 Failed／0 Skipped，Full Regression 662 Passed／0 Failed／4 Skipped。
+
+後續 SQL Writer 實作記錄：Infrastructure 內部 ExecutionAdmission／ProcessingExecutionStore／ProcessingInvocationCoordinator 已交付，沒有公開 API 直接以 JobId 繞過 Admission 的入口。T1 同交易保存 Binding、條件 Claim、Run／checkpoint／Invocation 及必要 Primary／Image／Batch 投影；T2 重核 StepOrder、前置 checkpoint 來源、RetryWaiting 期限／Transient 槽位與完整 Attempt／Resume 序列。同交易重新核對持久來源與版本，Binding 不覆寫。Commit Unknown 用新 DbContext 核對原持久身分，不重跑 Writer；只有確認提交的勝者才能在交易外呼叫 Adapter。
+
+Writer 使用明確標示的隔離測試准入上下文驗證合法成功路徑；47 項真實 SQL Writer 測試通過，另有5項既有 applock 測試及2項 Coordinator Unit Tests。覆蓋多 Worker／跨 Job checksum、所有必要寫入點 Rollback、Pending Run／Resume、T2 競爭、Commit Unknown 已提交／未提交／證據矛盾、提交前後取消、無准入／未取得權利的 Adapter 零呼叫。Fixture 模擬已提交的 T3／T4／T5 狀態，不代表那些 Writer 或下游模組已交付。
+
+最新完整驗證（2026-11-09，Final Compatibility Validation & Acceptance）：`dotnet restore PhotoPlatform.sln` 成功；`dotnet build PhotoPlatform.sln --no-restore` 為 0 Errors／3 NU1900；`dotnet test PhotoPlatform.sln --no-build --no-restore` 為 Unit 526 Passed／0 Failed／4 Skipped，真實 SQL Integration 203 Passed／0 Failed／0 Skipped，Full Regression 729 Passed／0 Failed／4 Skipped。Resolver 專項真實 SQL 測試 27 Passed／0 Failed／0 Skipped，其中本輪新增18項。四項 Skip 為本程序三項 Symbolic Link 權限不足與一項 Windows 上不執行的非 Windows 分支；既有使用者管理員安全測試 13 Passed／0 Failed／1 Skipped 為另一份證據，不是本輪執行。NU1900 不代表弱點稽核成功。
+
+本輪依人工批准補齊最小 internal IManifestStepImplementation 接點：每個 Step 必須有唯一且精確符合 Workflow／WorkflowVersion／Step／RuleVersion 的已交付實作，完整比對必要 Resource kind／id／version／checksum 集合後，由該實作驗證子格式及跨資源相容性，全部通過才回傳 ResolvedRuleManifest。測試以隔離實作驗證合法成功、不相容子格式（checksum 正確仍拒絕）、缺少依賴、版本／身分不符、重複實作、取消及無 Admission 的零 SQL Writer／Adapter 呼叫；不以任意 boolean 或版本字串存在代替能力驗證。Production 建構子未註冊尚未交付的模組實作，維持 Fail-Closed，測試 Fixture 不進入正式版本清單。
+
+TASK-05 自身 SQL Writer、Manifest 消費端相容性驗證及下列 Acceptance Criteria／DoD 已通過，判定 ACCEPTANCE PASS。正式發布資源、歷史保存、模組實作配對、首次准入新 Job 與 Legacy Job 的證據來源，以及 N-01／N-02 仍為既有發布／部署與後續整合依賴；不替 Legacy 補綁、不宣稱 Production Runtime 已啟用。T3／Retry／Recovery／Worker 與完整模組整合仍由後續 TASK 交付。
+
+- [x] T1/T2 invariant 在真實 SQL 成立。
+- [x] 嚴格 Root v1 Parser 拒絕別名／重複／未知欄位；完整核對發布 bytes 與可執行資源。跨 Job applock 的並行、負回傳碼、逾時、取消、Rollback 有真實 SQL 證據；Legacy 缺首次准入證據時不綁定。
+- [x] 缺 binding/context、DB錯誤、重複通知皆不導致分析副作用。
+- [x] 保持原 Job schema/Queue signature；尚未有 Worker 不冒稱 runtime 已啟用。
 
 ## 13. Definition of Done
 
-- [ ] 實作前 Review 與人工批准可追溯，實作基準與前置交付已確認。
-- [ ] 本 TASK Acceptance Criteria 有實際測試證據；未執行/跳過與失敗分開報告。
-- [ ] 在授權範圍執行 Restore/Build/相關 Unit Tests，記錄命令、版本與結果；必要 SQL Integration Tests 有隔離環境證據。
-- [ ] 未破壞 MOD-01 API/Queue/原表 Mapping；沒有未核准套件、Schema、業務預設。
-- [ ] 沒有未解決的本 TASK 規格衝突；外部依賴與剩餘限制明列。
-- [ ] Diff 僅含本 TASK 核准程式／測試／必要 Migration，無 secret。
-- [ ] 原子 start persistence 及 SQL 測試通過；T3／Recovery 後續交付。
+- [x] 實作前 Review 與人工批准可追溯，實作基準與前置交付已確認。
+- [x] 本 TASK Acceptance Criteria 有實際測試證據；未執行/跳過與失敗分開報告。
+- [x] 在授權範圍執行 Restore/Build/相關 Unit Tests，記錄命令、版本與結果；必要 SQL Integration Tests 有隔離環境證據。
+- [x] 未破壞 MOD-01 API/Queue/原表 Mapping；沒有未核准套件、Schema、業務預設。
+- [x] 沒有未解決的本 TASK 規格衝突；外部依賴與剩餘限制明列。
+- [x] Diff 僅含本 TASK 核准程式／測試／必要 Migration，無 secret。
+- [x] 原子 start persistence 及 SQL 測試通過；T3／Recovery 後續交付。
 
 PLANNED/DEPENDENCY_PENDING/PLANNED_WITH_DEPENDENCIES/BLOCKED 均不是 PASS；文件建立不勾選上述項目。
 

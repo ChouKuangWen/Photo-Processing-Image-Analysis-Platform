@@ -29,7 +29,7 @@ public sealed class ProcessingSchemaTests : IAsyncLifetime
     {
         await using var db = fixture.CreateContext();
         await db.Database.MigrateAsync();
-        Assert.Equal(2, (await db.Database.GetAppliedMigrationsAsync()).Count());
+        Assert.Equal(3, (await db.Database.GetAppliedMigrationsAsync()).Count());
         Assert.Empty(await db.Database.GetPendingMigrationsAsync());
         Assert.False(db.Database.HasPendingModelChanges());
         var model = db.GetService<IDesignTimeModel>().Model;
