@@ -3,7 +3,7 @@
 **Task ID:** MOD-02-TASK-04  
 **Module:** MOD-02 Processing  
 **Task Name:** Workflow、Input Context 與 Adapter 契約  
-**Status:** PLANNED  
+**Status:** COMPLETED（核准的純契約交付範圍；Runtime 驗收仍為 DOWNSTREAM PENDING）
 **Architecture:** Clean Architecture  
 **Planning Baseline:** `1460fb1b4ae9b76e492adde262988f03c19934ba`  
 **Planning Branch:** `feature/mod-02-processing`
@@ -122,6 +122,19 @@ T4 僅安全 Startup Recovery；T5 僅人工 Retry。T2-W 僅核准的 VERSION_A
 - canonical JSON 的文化、null、排序、Unicode、UTC 測試向量；改業務 input 改 fingerprint，改 trace/attempt 不改。
 - 結果版本／來源不符拒絕重用；缺 Template、未核准引擎零 invocation；明確 Skip 與任意 Skip 分開。
 
+### B3-F01 人工核准澄清：純契約與 Runtime 驗收責任（2026-11-08）
+
+上述安全要求全部保留，不因純型別測試通過而視為已完成 Runtime 驗證。TASK-04 驗收型別、格式、不變量、介面交接及受控失敗；需要真實協調、Step policy 或持久來源的行為驗收，依下表正式移交。DOWNSTREAM PENDING 表示尚未驗證，不是 PASS，也不是取消要求。
+
+| 原始要求 | TASK-04 必交與現有證據 | 正式移交的 Runtime 驗收 | 下游責任／狀態 |
+|---|---|---|---|
+| ResultReference 來源／版本不符拒絕重用 | IResultReferenceVerifier、獨立受控失敗分類；ResultReferenceVerifierContractTests 僅驗證 Signature、例外與取消交接 | 以真正持久來源及適當 SQL Integration Tests 驗證 ContentVersion／RuleVersion／InputFingerprint 不符、錯 Owner／History／Checkpoint、非 Completed 均不得重用；不能只看 row 存在 | [TASK-06](TASK-06-Outcome-History-Aggregates-Events.md)／[TASK-12](TASK-12-Module-Adapters-Naming-Handoff.md)：DOWNSTREAM PENDING |
+| Missing Template 零 Invocation | NamingInput 必要 Template 建構／格式驗證；NamingInputTests.Input_ValidatesTextAndIdentityBoundaries，不證明 Adapter 零呼叫 | 必要 Naming Input 未就緒不得呼叫 Adapter，不建假 Running／Completed History，不補 Template 或以最新值替代原凍結值 | [TASK-05](TASK-05-Atomic-Claim-Invocation-Start.md)／TASK-12：DOWNSTREAM PENDING |
+| 未核准 Engine／Profile／RuleVersion 零 Invocation | WorkflowDefinition／具名 Input 不填未核准預設；WorkflowDefinitionTests 驗證未知流程版本拒絕，不能代替 Engine Registry 或調度驗證；N-01／N-02 保留 | 在真正調度與整合環境驗證受影響 Adapter 零 Invocation；WorkflowDefinition 存在不等於可執行 | TASK-05／相關模組／TASK-12：DOWNSTREAM PENDING |
+| 合法 Skip 與任意 Skip 分開 | StepOutcome R3 與 StepOutcomeTests.Returned_EnforcesPairing 驗證合法狀態配對；R3 不批准 Step-specific Skip，任意 Skipped 不是必要 Step 完成證據 | 依核准 Step policy 與持久證據拒絕非法 Skip，驗證 MissingGPS、Naming Collision Skip 等適用情境；不能僅因 R3 結構合法就提交 Completed Checkpoint | TASK-06／TASK-12：DOWNSTREAM PENDING |
+
+下游實作前須承接本表要求並建立對應行為／整合測試；表中引用的 TASK 責任不是其已交付證明。不新增假的 Policy／Orchestrator，也不以測試替身自行拋錯或接受 Skip 充當持久驗證。真正 Provider／Verifier／Reader、SQL、Storage、Retry／Recovery 尚未完成，依原責任與後續整合交付；N-01／N-02 及 Analysis／Full Runtime 限制不變。
+
 測試名稱需表達 Given/When/Expected 行為；覆蓋成功、拒絕、邊界及適用的取消。不用真實 SQL、外部 API 或 GCS 作 Unit Test 前提。
 
 ## 11. Integration Tests
@@ -135,21 +148,27 @@ T4 僅安全 Startup Recovery；T5 僅人工 Retry。T2-W 僅核准的 VERSION_A
 
 ## 12. Acceptance Criteria
 
-- [ ] 可追溯到核准 Workflow／input／Outcome，未新增業務預設。
-- [ ] 列明已存在、測試替身與尚未交付的 concrete adapters。
-- [ ] 契約可供 T1～T5 使用但不承諾未核准的 public API 或 Schema。
+- [x] 可追溯到核准 Workflow／input／Outcome，未新增業務預設。
+- [x] 列明已存在、測試替身與尚未交付的 concrete adapters。
+- [x] 契約可供 T1～T5 使用但不承諾未核准的 public API 或 Schema。
+
+本節驗收範圍依 §10 B3-F01 澄清：TASK-04 的純型別／抽象與已核准具名 Input 須有實際測試證據；Runtime 安全要求須有明確下游責任追蹤，不得改標 PASS。已移交項目不要求本 TASK 提前實作 Orchestrator、Step policy 或 SQL，但任何仍屬本 TASK 的缺失不得改稱外部依賴。
 
 ## 13. Definition of Done
 
-- [ ] 實作前 Review 與人工批准可追溯，實作基準與前置交付已確認。
-- [ ] 本 TASK Acceptance Criteria 有實際測試證據；未執行/跳過與失敗分開報告。
-- [ ] 在授權範圍執行 Restore/Build/相關 Unit Tests，記錄命令、版本與結果；必要 SQL Integration Tests 有隔離環境證據。
-- [ ] 未破壞 MOD-01 API/Queue/原表 Mapping；沒有未核准套件、Schema、業務預設。
-- [ ] 沒有未解決的本 TASK 規格衝突；外部依賴與剩餘限制明列。
-- [ ] Diff 僅含本 TASK 核准程式／測試／必要 Migration，無 secret。
-- [ ] Workflow／Context 核心與測試完成；真實來源缺失明列，不阻擋不依賴其演算法的核心工作。
+- [x] 實作前 Review 與人工批准可追溯，實作基準與前置交付已確認。
+- [x] 本 TASK Acceptance Criteria 有實際測試證據；未執行/跳過與失敗分開報告。
+- [x] 在授權範圍執行 Restore/Build/相關 Unit Tests，記錄命令、版本與結果；本次無持久 reference 查詢實作，SQL Integration Tests 不適用，後續需求依 §10／§11 追蹤。
+- [x] 未破壞 MOD-01 API/Queue/原表 Mapping；沒有未核准套件、Schema、業務預設。
+- [x] 沒有未解決的本 TASK 規格衝突；外部依賴與剩餘限制明列。
+- [x] Diff 僅含本 TASK 核准程式／測試／必要 Migration，無 secret。
+- [x] Workflow／Context 核心與測試完成；真實來源缺失明列，不阻擋不依賴其演算法的核心工作。
 
-PLANNED/DEPENDENCY_PENDING/PLANNED_WITH_DEPENDENCIES/BLOCKED 均不是 PASS；文件建立不勾選上述項目。
+依 B3-F01 決策，縮限契約範圍只有在本 TASK 保留的交付與測試皆滿足、§10 Runtime 驗收均有正式下游責任且維持 DOWNSTREAM PENDING 時，才可提交最終人工批准；不是將未執行項目改判通過。此澄清不變更業務安全規則、T1～T5、R3 或下游實作准入。
+
+前次 B-3 證據基準為 `d68d6a6e3cc4492c65854d51bcf0387d31a23755`：Restore 成功、Build 0 Errors／3 NU1900、Unit Tests 470 Passed／0 Failed／0 Skipped。本次僅澄清驗收文件，Production／Test Code 未變，沿用該證據，不宣稱重新執行；NU1900 是弱點資料取得失敗，不代表安全稽核通過。SQL／Storage／Recovery 行為未由此證明。2026-11-09 人工批准本 TASK 核准純契約範圍結案及上述勾選；§10 Runtime 驗收全部保留 DOWNSTREAM PENDING，不宣稱 Analysis／Full Runtime Ready，不自動開始 TASK-05。
+
+PLANNED/DEPENDENCY_PENDING/PLANNED_WITH_DEPENDENCIES/BLOCKED 均不是 PASS；僅建立文件不能勾選上述項目，本次勾選以已交付程式、實際測試及人工結案批准為依據。
 
 ## 14. Git Commit Boundary
 
